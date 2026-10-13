@@ -42,3 +42,35 @@ def test_analyze_competitor_returns_schema(fake_llm):
     result = analyze_competitor("page text", "https://acme.com", llm=llm)
     assert result == expected
     assert isinstance(result, CompetitorProfile)
+
+
+def test_summarize_prompt_contains_input(fake_llm):
+    expected = NewsSummary(headline="h", summary="s", sentiment_hint="neutral")
+    llm = fake_llm({NewsSummary: expected})
+    summarize_article("Breaking: Market Rally", "Stocks surged today.", llm=llm)
+    prompt = llm.calls[-1]
+    assert "Breaking: Market Rally" in prompt
+    assert "Stocks surged today." in prompt
+
+
+def test_identify_trends_prompt_contains_input(fake_llm):
+    expected = TrendAnalysis(trends=[TrendReport(trend_name="AI", confidence=0.9)])
+    llm = fake_llm({TrendAnalysis: expected})
+    identify_trends(["generative AI in healthcare is accelerating"], llm=llm)
+    assert "generative AI in healthcare is accelerating" in llm.calls[-1]
+
+
+def test_analyze_sentiment_prompt_contains_input(fake_llm):
+    expected = SentimentResult(overall="positive", score=0.8)
+    llm = fake_llm({SentimentResult: expected})
+    analyze_sentiment("customers love the new feature", llm=llm)
+    assert "customers love the new feature" in llm.calls[-1]
+
+
+def test_analyze_competitor_prompt_contains_input(fake_llm):
+    expected = CompetitorProfile(company="Acme", positioning="leader")
+    llm = fake_llm({CompetitorProfile: expected})
+    analyze_competitor("Acme is a leading widget maker.", "https://acme.com", llm=llm)
+    prompt = llm.calls[-1]
+    assert "https://acme.com" in prompt
+    assert "Acme is a leading widget maker." in prompt
