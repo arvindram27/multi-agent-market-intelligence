@@ -10,6 +10,7 @@ def test_get_llm_raises_clear_error_without_key(monkeypatch):
     # no local .env or environment value is read.
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     monkeypatch.setattr(config_mod.settings, "openai_api_key", "")
+    # NOTE: this override proves the message is clear, but not that a stray .env can't leak a key into other tests.
 
     with pytest.raises(RuntimeError) as exc_info:
         get_llm()
