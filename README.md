@@ -2,6 +2,8 @@
 
 A comprehensive multi-agent system designed to automate market intelligence gathering, processing, and analysis. This project implements specialized AI agents that work together to provide insights from news, competitor activities, market trends, and consumer sentiment.
 
+> 📄 **Production roadmap:** see [`PRODUCTION_PLAN.md`](./PRODUCTION_PLAN.md) for the full migration plan (LangGraph · LangChain · Oracle 23ai · LangSmith · Grafana · RAGAS).
+
 ## 🚀 Features
 
 ### Core Agents
@@ -17,19 +19,27 @@ A comprehensive multi-agent system designed to automate market intelligence gath
 ## 📁 Project Structure
 
 ```
-├── main_orchestrator_mvp.py          # Main coordination system
-├── news_agent_mvp.py                 # News monitoring and summarization
-├── competitor_agent_mvp.py           # Competitor tracking and analysis
-├── trend_agent_mvp.py                # Trend detection and analysis
-├── sentiment_agent_mvp.py            # Sentiment analysis engine
-├── page.tsx                          # Web UI component
+├── agents/
+│   ├── news_summarization_agent/
+│   │   └── news_agent_mvp.py          # News monitoring and summarization
+│   ├── competitor_analysis_agent/
+│   │   └── competitor_agent_mvp.py    # Competitor tracking and analysis
+│   ├── trend_identification_agent/
+│   │   └── trend_agent_mvp.py         # Trend detection and analysis
+│   └── consumer_sentiment_analysis_agent/
+│       └── sentiment_agent_mvp.py     # Sentiment analysis engine
+├── orchestration/
+│   └── main_orchestrator_mvp.py       # Main coordination system
+├── data/                              # Runtime output / cache
+├── PRODUCTION_PLAN.md                 # Production-grade migration roadmap
+├── page.tsx                           # Web UI component
 ├── documentation/
 │   ├── AI Agent Ecosystem Architecture for Market Intelligence.md
 │   ├── AI Agent Ecosystem_ Components and Roles.md
 │   └── Critical Analysis of the AI Agent Ecosystem for Market Intelligence.md
 ├── assets/
 │   ├── hero_image_symbiotic_intelligence.png
-│   ├── icon_*.png                    # Agent icons
+│   └── icon_*.png                     # Agent icons
 └── README.md
 ```
 
@@ -37,19 +47,18 @@ A comprehensive multi-agent system designed to automate market intelligence gath
 
 ### MVP Features (✅ Implemented)
 - Basic RSS feed processing
-- Simple web scraping capabilities  
+- Simple web scraping capabilities
 - Keyword-based trend analysis
 - Rule-based sentiment classification
 - Sequential agent orchestration
 
-### Production Features (📋 Planned)
-- LLM integration (Claude, GPT-4)
-- Vector database storage (Pinecone, Weaviate)
-- Advanced NLP and sentiment analysis
-- Real-time data processing pipelines
-- Interactive dashboards and alerts
-- Financial data integration
-- Social media monitoring
+### Production Features (🚧 Planned — see `PRODUCTION_PLAN.md`)
+- **LLM agents** via LangChain (`init_chat_model` → OpenAI) with typed Pydantic structured output
+- **LangGraph** supervisor orchestration with checkpointing, retries, and human-in-the-loop
+- **Oracle Autonomous Database 23ai** persistence + AI Vector Search (RAG)
+- **Observability** via LangSmith + OpenTelemetry → Grafana Cloud
+- **Evaluation** via RAGAS + LangSmith datasets (offline + online)
+- **Streamlit demo UI** with live agent streaming
 
 ## 🚀 Quick Start
 
@@ -61,13 +70,13 @@ pip install feedparser requests beautifulsoup4
 ### Running the System
 ```bash
 # Run individual agents
-python news_agent_mvp.py
-python competitor_agent_mvp.py
-python trend_agent_mvp.py
-python sentiment_agent_mvp.py
+python agents/news_summarization_agent/news_agent_mvp.py
+python agents/competitor_analysis_agent/competitor_agent_mvp.py
+python agents/trend_identification_agent/trend_agent_mvp.py
+python agents/consumer_sentiment_analysis_agent/sentiment_agent_mvp.py
 
 # Run complete orchestrated system
-python main_orchestrator_mvp.py
+python orchestration/main_orchestrator_mvp.py
 ```
 
 ### Example Output
@@ -77,6 +86,16 @@ The orchestrator will:
 3. Analyze sentiment of the content
 4. Scrape competitor information from a predefined URL
 5. Display coordinated results from all agents
+
+## 🖥️ Streamlit Demo (planned)
+
+A Streamlit app will drive the LangGraph workflow and stream each agent's output into tabs
+(News · Trends · Sentiment · Competitors), with a human-approval button for competitor profiles.
+See **§5.6 Streamlit demo UI** and the **vertical-slice milestone** in `PRODUCTION_PLAN.md`.
+
+```bash
+streamlit run app.py
+```
 
 ## 📊 Architecture Overview
 
@@ -112,38 +131,27 @@ The orchestrator will:
 - collections.Counter (basic analytics)
 
 **Planned Production Stack:**
-- LLM APIs (Claude, GPT-4)
-- Vector Databases (Pinecone, Weaviate)
-- Message Queues (RabbitMQ, Kafka)
-- Workflow Orchestration (Airflow, Prefect)
-- Modern web frameworks for UI
+- LangGraph (stateful orchestration) + LangChain (typed agents & tools)
+- OpenAI models (`init_chat_model` provider-agnostic)
+- Oracle Autonomous Database 23ai — AI Vector Search (HNSW/IVF) via `langchain-oracledb`
+- LangSmith (tracing, evals, prompts) + OpenTelemetry → Grafana Cloud (Tempo/Loki/Prometheus)
+- RAGAS (faithfulness, answer relevancy, context precision/recall)
+- FastAPI (serving) + Streamlit (demo UI)
 
 ## 📈 Roadmap
 
-### Phase 1: MVP Enhancement (Current)
-- [ ] Add error handling and logging
-- [ ] Implement configuration management
-- [ ] Add unit tests
-- [ ] Improve agent communication protocols
+| Phase | Scope |
+|---|---|
+| 0 — Foundation | Packaging (`pyproject.toml` + `uv`), config, `structlog`, CI, tests |
+| 1 — LLM-ify agents | Typed OpenAI agents + tools (`with_structured_output`) |
+| 2 — Orchestration | LangGraph supervisor graph + checkpointing + HITL |
+| 2.5 — Streamlit demo | Vertical slice: stream all agents into tabs + approve button |
+| 3 — Data | Oracle 23ai schema, embeddings, vector search/RAG |
+| 4 — Observability | LangSmith + OTel → Grafana Cloud |
+| 5 — Evals | RAGAS + LangSmith datasets, CI gating |
+| 6 — Serving & hardening | FastAPI, background jobs, Docker/K8s/OCI, security |
 
-### Phase 2: AI Integration
-- [ ] Integrate LLM APIs for advanced summarization
-- [ ] Implement vector embeddings for semantic search
-- [ ] Add advanced sentiment analysis models
-- [ ] Create intelligent trend forecasting
-
-### Phase 3: Production Features
-- [ ] Build web dashboard interface
-- [ ] Add real-time data processing
-- [ ] Implement user authentication and multi-tenancy
-- [ ] Create alert and notification systems
-- [ ] Add data visualization components
-
-### Phase 4: Advanced Analytics
-- [ ] Predictive market modeling
-- [ ] Anomaly detection systems
-- [ ] Cross-source data correlation
-- [ ] Advanced reporting and insights
+See `PRODUCTION_PLAN.md` for full detail and exit criteria.
 
 ## 🤝 Contributing
 
@@ -157,7 +165,7 @@ This project is designed as a comprehensive market intelligence solution. Future
 
 ## 📄 Documentation
 
-Detailed documentation is available in the `/documentation` folder:
+- **Production roadmap:** [`PRODUCTION_PLAN.md`](./PRODUCTION_PLAN.md)
 - **Architecture Overview**: System design and component relationships
 - **Component Specifications**: Detailed role definitions for each agent
 - **Critical Analysis**: SWOT analysis and relevance assessment
@@ -175,4 +183,4 @@ For questions about implementation or extending this system, refer to the compre
 
 ---
 
-**Status**: MVP Implementation Complete | **Next Phase**: LLM Integration & Production Readiness
+**Status**: MVP Implementation Complete | **Next Phase**: LLM Integration & Production Readiness (see `PRODUCTION_PLAN.md`)
