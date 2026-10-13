@@ -63,7 +63,7 @@ A comprehensive multi-agent system designed to automate market intelligence gath
 ## 🚀 Quick Start
 
 ### Prerequisites
-Python 3.9+ and the pinned dependencies in `requirements.txt`:
+Python 3.10+ and the pinned dependencies in `pyproject.toml`.
 
 ```bash
 python -m venv .venv
@@ -72,8 +72,14 @@ python -m venv .venv
 # macOS/Linux:
 source .venv/bin/activate
 
-pip install -r requirements.txt
+# Canonical install (package + runtime dependencies):
+pip install -e .
+# Development install (adds test tooling):
+pip install -e ".[dev]"
 ```
+
+> `requirements.txt` mirrors the runtime pins from `pyproject.toml` for environments that
+> only need the dependencies, not the package itself (`pip install -r requirements.txt`).
 
 ### Running the System
 Run from the repository root so the `agents` package is importable.
