@@ -43,6 +43,11 @@ A comprehensive multi-agent system designed to automate market intelligence gath
 └── README.md
 ```
 
+> **Legacy vs. LLM:** the `agents/` and `orchestration/` directories at the repo root are the
+> **legacy deterministic MVP** (runnable baseline). The **LLM-backed agents** live in
+> `src/market_intelligence/agents/` (imported as `market_intelligence.agents.*`). The legacy
+> tree will be removed in a later phase of `PRODUCTION_PLAN.md`.
+
 ## 🛠️ Current Implementation Status
 
 ### MVP Features (✅ Implemented)
