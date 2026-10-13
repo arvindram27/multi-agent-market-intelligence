@@ -1,6 +1,4 @@
-# Consumer Sentiment Analysis Agent MVP
 import re
-
 # Basic sentiment keyword lists for MVP
 # In a real system, this would be a sophisticated model (e.g., LLM-based or a trained classifier)
 POSITIVE_WORDS = set([
@@ -11,18 +9,14 @@ NEGATIVE_WORDS = set([
     "bad", "terrible", "horrible", "awful", "hate", "dislike", "sad", "unhappy",
     "disappointed", "poor", "worst", "problem", "issue", "fail", "error", "broken"
 ])
-
 def analyze_sentiment_basic(text):
     """Performs basic sentiment analysis based on keyword matching."""
     if not text:
         return "neutral", 0 # Default to neutral if no text
-
     text_lower = text.lower()
     words = re.findall(r"\b\w+\b", text_lower) # Extract words
-
     positive_score = 0
     negative_score = 0
-
     for word in words:
         if word in POSITIVE_WORDS:
             positive_score += 1
@@ -41,7 +35,6 @@ def analyze_sentiment_basic(text):
     score_difference = positive_score - negative_score
     
     return sentiment, score_difference
-
 if __name__ == "__main__":
     print("--- Consumer Sentiment Analysis Agent MVP Running ---")
     
@@ -59,7 +52,6 @@ if __name__ == "__main__":
     
     analyzed_sentiments = []
     print(f"Analyzing {len(sample_posts)} sample posts...")
-
     for i, post in enumerate(sample_posts):
         sentiment, score = analyze_sentiment_basic(post)
         analyzed_sentiments.append({
@@ -73,11 +65,10 @@ if __name__ == "__main__":
     if analyzed_sentiments:
         print("\n--- Analyzed Sentiments (MVP) --- ")
         for item in analyzed_sentiments:
-            print(f"\nPost ID: {item["post_id"]}")
-            print(f"Text: {item["text"]}")
-            print(f"Sentiment: {item["sentiment"]} (Score Diff: {item["score_difference"]})")
+            print(f"\nPost ID: {item['post_id']}")
+            print(f"Text: {item['text']}")
+            print(f"Sentiment: {item['sentiment']} (Score Diff: {item['score_difference']})")
     else:
         print("No sentiments were analyzed from the sample data.")
         
     print("\n--- Consumer Sentiment Analysis Agent MVP Finished ---")
-

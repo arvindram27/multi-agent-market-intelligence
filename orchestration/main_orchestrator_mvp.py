@@ -1,43 +1,10 @@
 # Main Orchestrator MVP
-import sys
-import os
 import json
 
-# Adjust sys.path to allow imports from the parent directory (market_intelligence_ecosystem)
-# This allows access to the agents module
-CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
-PARENT_DIR = os.path.dirname(CURRENT_DIR)
-GRANDPARENT_DIR = os.path.dirname(PARENT_DIR)
-# Add the directory containing the 'agents' module to sys.path
-# The structure is /home/ubuntu/market_intelligence_ecosystem, and this script is in orchestration subdir
-# So, we need to add /home/ubuntu/market_intelligence_ecosystem to path
-PROJECT_ROOT = PARENT_DIR # This should be /home/ubuntu/market_intelligence_ecosystem
-sys.path.append(PROJECT_ROOT)
-
-# Import agent functions
-# It seems the original plan was to put each agent in its own sub-sub-directory.
-# Let's adjust the path to reflect the actual structure used during development.
-# The structure is: market_intelligence_ecosystem/agents/<agent_name_folder>/<agent_script.py>
-# So, if PROJECT_ROOT is market_intelligence_ecosystem, then we need to import from agents.<agent_name_folder>.<agent_script_name_without_py>
-
-try:
-    from agents.news_summarization_agent.news_agent_mvp import fetch_and_summarize_news
-    from agents.competitor_analysis_agent.competitor_agent_mvp import fetch_competitor_info
-    from agents.trend_identification_agent.trend_agent_mvp import analyze_text_for_trends
-    from agents.consumer_sentiment_analysis_agent.sentiment_agent_mvp import analyze_sentiment_basic
-except ImportError as e:
-    print(f"Error importing agent modules: {e}")
-    print(f"Current sys.path: {sys.path}")
-    print(f"PROJECT_ROOT used for sys.path.append: {PROJECT_ROOT}")
-    # Attempting a more direct relative path for sys.path addition
-    # This script is in /home/ubuntu/market_intelligence_ecosystem/orchestration
-    # Agents are in /home/ubuntu/market_intelligence_ecosystem/agents
-    # So, adding /home/ubuntu/market_intelligence_ecosystem should be correct.
-    # Let's try to print the expected path for agent modules to debug
-    expected_news_agent_path = os.path.join(PROJECT_ROOT, "agents", "news_summarization_agent", "news_agent_mvp.py")
-    print(f"Expected path for news_agent_mvp.py: {expected_news_agent_path}")
-    print(f"Does it exist? {os.path.exists(expected_news_agent_path)}")
-    exit()
+from agents.news_summarization_agent.news_agent_mvp import fetch_and_summarize_news
+from agents.competitor_analysis_agent.competitor_agent_mvp import fetch_competitor_info
+from agents.trend_identification_agent.trend_agent_mvp import analyze_text_for_trends
+from agents.consumer_sentiment_analysis_agent.sentiment_agent_mvp import analyze_sentiment_basic
 
 def run_ecosystem_mvp():
     """Runs a simple MVP workflow for the agent ecosystem."""
