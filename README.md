@@ -63,11 +63,21 @@ A comprehensive multi-agent system designed to automate market intelligence gath
 ## 🚀 Quick Start
 
 ### Prerequisites
+Python 3.9+ and the pinned dependencies in `requirements.txt`:
+
 ```bash
-pip install feedparser requests beautifulsoup4
+python -m venv .venv
+# Windows:
+.venv\Scripts\activate
+# macOS/Linux:
+source .venv/bin/activate
+
+pip install -r requirements.txt
 ```
 
 ### Running the System
+Run from the repository root so the `agents` package is importable.
+
 ```bash
 # Run individual agents
 python agents/news_summarization_agent/news_agent_mvp.py
@@ -75,8 +85,8 @@ python agents/competitor_analysis_agent/competitor_agent_mvp.py
 python agents/trend_identification_agent/trend_agent_mvp.py
 python agents/consumer_sentiment_analysis_agent/sentiment_agent_mvp.py
 
-# Run complete orchestrated system
-python orchestration/main_orchestrator_mvp.py
+# Run complete orchestrated system (from the repo root)
+python -m orchestration.main_orchestrator_mvp
 ```
 
 ### Example Output
