@@ -43,6 +43,11 @@ A comprehensive multi-agent system designed to automate market intelligence gath
 └── README.md
 ```
 
+> **Legacy vs. LLM:** the `agents/` and `orchestration/` directories at the repo root are the
+> **legacy deterministic MVP** (runnable baseline). The **LLM-backed agents** live in
+> `src/market_intelligence/agents/` (imported as `market_intelligence.agents.*`). The legacy
+> tree will be removed in a later phase of `PRODUCTION_PLAN.md`.
+
 ## 🛠️ Current Implementation Status
 
 ### MVP Features (✅ Implemented)
@@ -102,6 +107,25 @@ The orchestrator will:
 3. Analyze sentiment of the content
 4. Scrape competitor information from a predefined URL
 5. Display coordinated results from all agents
+
+## ⚙️ Configuration
+
+The LLM agents (`src/market_intelligence/`) read settings from environment variables or a
+`.env` file (copy `.env.example` to `.env`). Model name and timeouts are configurable:
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `OPENAI_API_KEY` | _(empty)_ | OpenAI API key (required for live LLM runs) |
+| `OPENAI_MODEL` | `gpt-4o-mini` | Model used by all agents |
+| `NEWS_REQUEST_TIMEOUT` | `15.0` | RSS fetch timeout (seconds) |
+| `COMPETITOR_REQUEST_TIMEOUT` | `15.0` | Competitor page fetch timeout (seconds) |
+| `NUM_ARTICLES` | `2` | Articles processed per run |
+
+### 💰 Cost per run
+
+**Placeholder** — not yet measured. A live run requires an `OPENAI_API_KEY`, which is not
+available in this environment, so the token count and cost per orchestrator run have not
+been benchmarked. Update this figure after a real run against `gpt-4o-mini`.
 
 ## 🖥️ Streamlit Demo (planned)
 
