@@ -189,7 +189,7 @@ $RECYCLE.BIN/
 
 # Project specific
 *.log
-checkpoints.db
+checkpoints.db*
 temp/
 tmp/
 data/cache/

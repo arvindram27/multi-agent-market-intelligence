@@ -85,22 +85,24 @@ state = st.session_state.get("state")
 
 
 def on_decision(approved: bool) -> None:
-    """Approve or reject the pending competitor profile, then rerun the page."""
+    """Approve or reject the profile. Runs as a button callback, before the rerun."""
     if DEMO_MODE:
         state["approved"] = approved
         state["status"] = "complete" if approved else "rejected"
         state["pending"] = False
-        st.rerun()
+        return
 
     config = {"configurable": {"thread_id": st.session_state.thread_id}}
     graph.invoke(Command(resume={"approved": approved}), config)
     st.session_state.state = render.view_from_snapshot(graph.get_state(config))
-    st.rerun()
 
 
-state = st.session_state.get("state")
 if state:
     st.caption(f"Status: **{state.get('status', 'running')}**")
+    if state.get("approved") is True:
+        st.success("Competitor profile approved — run complete.")
+    elif state.get("approved") is False:
+        st.error("Competitor profile rejected — nothing was persisted.")
 
 tabs = st.tabs(["News", "Trends", "Sentiment", "Competitors"])
 
