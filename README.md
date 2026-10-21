@@ -180,15 +180,41 @@ Rates used: $0.15 per 1M input tokens and $0.60 per 1M output tokens (`gpt-4o-mi
 list prices at measurement time). Output was capped at 512 tokens per call; wall clock
 was 16.6s.
 
-## 🖥️ Streamlit Demo (planned)
+## 🖥️ Streamlit Demo
 
-A Streamlit app will drive the LangGraph workflow and stream each agent's output into tabs
-(News · Trends · Sentiment · Competitors), with a human-approval button for competitor profiles.
-See **§5.6 Streamlit demo UI** and the **vertical-slice milestone** in `PRODUCTION_PLAN.md`.
+The demo drives the same `build_graph()` workflow, streams each node's completion into the
+status panel, and renders results into four tabs. When the graph hits the HITL interrupt, the
+Competitors tab shows the pending profile with **Approve** / **Reject** buttons.
+
+### Run it
 
 ```bash
+pip install -e ".[demo]"
+cp .env.example .env          # add OPENAI_API_KEY
 streamlit run app.py
 ```
+
+### Fixture mode (no API key)
+
+Screenshots and reviews use a committed snapshot so captures are deterministic and offline:
+
+```powershell
+$env:DEMO_MODE=1; streamlit run app.py
+```
+
+The app labels it as **fixture data captured 2026-10-21 — not a live run**.
+
+### Screenshots (1920×1080)
+
+| News | Trends |
+|---|---|
+| ![News tab](docs/screenshots/01-news.png) | ![Trends tab](docs/screenshots/02-trends.png) |
+
+| Sentiment | Competitor approval (HITL) |
+|---|---|
+| ![Sentiment tab](docs/screenshots/03-sentiment.png) | ![Competitor approval](docs/screenshots/04-competitors-approval.png) |
+
+![Approved run](docs/screenshots/05-approved.png)
 
 ## 📊 Architecture Overview
 

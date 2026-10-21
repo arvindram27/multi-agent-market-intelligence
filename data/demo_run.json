@@ -1,0 +1,121 @@
+{
+  "captured_at": "2026-10-21",
+  "label": "Fixture snapshot — deterministic demo data, not a live run",
+  "inputs": {
+    "rss_url": "https://feeds.bbci.co.uk/news/business/rss.xml",
+    "competitor_url": "https://acme-health.example.com/about",
+    "num_articles": 3
+  },
+  "state": {
+    "status": "awaiting_approval",
+    "approved": null,
+    "summaries": [
+      {
+        "headline": "NHS trusts begin piloting AI triage assistants",
+        "summary": "Three NHS trusts are trialling AI triage assistants to prioritise non-urgent appointments, with clinicians retaining final sign-off. Early results suggest shorter waiting lists but mixed staff feedback on workload.",
+        "key_facts": [
+          "Pilot covers three trusts and roughly 120,000 appointments",
+          "Clinicians keep final sign-off on every triage decision",
+          "Initial waiting-time reduction of 11% in the pilot cohort"
+        ],
+        "sentiment_hint": "positive"
+      },
+      {
+        "headline": "Regulators publish first code of practice for clinical AI",
+        "summary": "A new code of practice sets expectations for validation, audit trails, and post-market monitoring of clinical AI tools. Vendors will need documented evidence of safety and bias testing before deployment.",
+        "key_facts": [
+          "Code applies to both providers and third-party vendors",
+          "Requires post-market monitoring and incident reporting",
+          "Compliance window runs through the next financial year"
+        ],
+        "sentiment_hint": "neutral"
+      },
+      {
+        "headline": "Health AI startup Acme raises £40m Series B",
+        "summary": "Acme Health AI raised £40m to expand its clinical documentation copilot across NHS trusts and into two European markets. The company says the round will fund integrations and a larger clinical safety team.",
+        "key_facts": [
+          "£40m Series B led by a European growth fund",
+          "Expansion into two European markets planned",
+          "Headcount to grow 60% over the next year"
+        ],
+        "sentiment_hint": "positive"
+      }
+    ],
+    "trends": [
+      {
+        "trend_name": "Clinical workflow automation",
+        "keywords": ["triage", "documentation", "NHS", "clinician sign-off"],
+        "confidence": 0.86,
+        "evidence": [
+          "NHS trusts are piloting AI triage across roughly 120,000 appointments",
+          "Acme is expanding a clinical documentation copilot across trusts",
+          "All pilots keep a clinician in the approval loop"
+        ]
+      },
+      {
+        "trend_name": "Regulatory scrutiny of medical AI",
+        "keywords": ["code of practice", "validation", "post-market monitoring", "bias testing"],
+        "confidence": 0.74,
+        "evidence": [
+          "Regulators published a code of practice covering validation and audit trails",
+          "Vendors must document safety and bias testing before deployment",
+          "Post-market monitoring is now an explicit requirement"
+        ]
+      },
+      {
+        "trend_name": "Consolidation in health-tech funding",
+        "keywords": ["Series B", "expansion", "European markets"],
+        "confidence": 0.68,
+        "evidence": [
+          "Acme raised £40m to expand into two European markets",
+          "Funding is concentrated in vendors with clinical safety teams"
+        ]
+      }
+    ],
+    "sentiments": [
+      {
+        "overall": "positive",
+        "score": 0.62,
+        "aspects": [
+          {"aspect": "patient outcomes", "sentiment": "positive", "score": 0.7},
+          {"aspect": "staff workload", "sentiment": "positive", "score": 0.4},
+          {"aspect": "clinical control", "sentiment": "positive", "score": 0.55}
+        ]
+      },
+      {
+        "overall": "neutral",
+        "score": 0.05,
+        "aspects": [
+          {"aspect": "compliance burden", "sentiment": "mixed", "score": -0.1},
+          {"aspect": "patient safety", "sentiment": "positive", "score": 0.3}
+        ]
+      },
+      {
+        "overall": "positive",
+        "score": 0.71,
+        "aspects": [
+          {"aspect": "investor confidence", "sentiment": "positive", "score": 0.8},
+          {"aspect": "market competition", "sentiment": "negative", "score": -0.2}
+        ]
+      }
+    ],
+    "competitor": {
+      "company": "Acme Health AI",
+      "positioning": "Enterprise clinical documentation copilot for NHS trusts, sold as a per-seat SaaS with an implementation package.",
+      "products": ["Acme Scribe", "Acme Triage Assist"],
+      "pricing_model": "Per-seat SaaS plus implementation fee",
+      "funding_stage": "Series B (£40m)",
+      "strengths": [
+        "Clinician-in-the-loop workflow reduces adoption risk",
+        "Existing NHS trust references from the triage pilot",
+        "Clinical safety team funded by the new round"
+      ],
+      "weaknesses": [
+        "Limited footprint outside the UK",
+        "New regulatory code adds validation overhead",
+        "Per-seat pricing is exposed to trust budget cycles"
+      ],
+      "sources": ["https://acme-health.example.com/about"]
+    }
+  }
+}
