@@ -1,5 +1,6 @@
 """Bounded fetcher tests: SSRF guards, redirects, status, type and size limits."""
 import ipaddress
+import socket
 
 import pytest
 import requests
@@ -113,6 +114,14 @@ def test_rejects_loopback_and_link_local_addresses():
         validate_public_url("http://[::1]/feed")
     with pytest.raises(PermanentFetchError, match="non-public"):
         validate_public_url("http://169.254.169.254/latest/meta-data")
+
+
+def test_resolver_rejects_private_dns_answers(monkeypatch):
+    info = (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("10.0.0.5", 80))
+    monkeypatch.setattr(net.socket, "getaddrinfo", lambda *args, **kwargs: [info])
+
+    with pytest.raises(PermanentFetchError, match="non-public"):
+        net._resolve_public_ips("internal.example", 80)
 
 
 def test_fetch_applies_timeout_and_no_redirects():
