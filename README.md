@@ -1,16 +1,16 @@
 # Multi-Agent AI Ecosystem for Market Intelligence
 
-A comprehensive multi-agent system designed to automate market intelligence gathering, processing, and analysis. This project implements specialized AI agents that work together to provide insights from news, competitor activities, market trends, and consumer sentiment.
+A comprehensive multi-agent system designed to automate market intelligence gathering, processing, and analysis. This project implements specialized AI agents that work together to provide insights from RSS news excerpts, competitor pages, extracted topics, and model-assessed news tone.
 
 > 📄 **Production roadmap:** see [`PRODUCTION_PLAN.md`](./PRODUCTION_PLAN.md) for the full migration plan (LangGraph · LangChain · Oracle 23ai · LangSmith · Grafana · RAGAS).
 
 ## 🚀 Features
 
 ### Core Agents
-- **News Summarization Agent**: Monitors RSS feeds and creates actionable news summaries
-- **Competitor Analysis Agent**: Tracks competitor websites and activities through web scraping
-- **Trend Identification Agent**: Identifies emerging trends through keyword frequency analysis
-- **Consumer Sentiment Analysis Agent**: Analyzes public sentiment using basic classification
+- **News Summarization Agent**: Monitors RSS feeds and creates summaries with source provenance
+- **Competitor Analysis Agent**: Fetches a competitor page and records the retrieved source
+- **Topic Extraction Agent**: Extracts topics from one RSS snapshot with cited evidence spans
+- **News Tone Agent**: Model-assesses the tone of the news summaries (not consumer sentiment)
 
 ### Orchestration
 - **LangGraph workflow**: typed state, checkpointing, retries, and a human-in-the-loop approval gate
@@ -31,7 +31,7 @@ A comprehensive multi-agent system designed to automate market intelligence gath
 ├── orchestration/
 │   └── main_orchestrator_mvp.py       # Main coordination system
 ├── src/market_intelligence/           # LLM agents + LangGraph workflow
-│   ├── agents/                        # news, trend, sentiment, competitor
+│   ├── agents/                        # news, topics, tone, competitor
 │   └── graph/                         # state, nodes, supervisor, serde
 ├── data/                              # Runtime output / cache
 ├── PRODUCTION_PLAN.md                 # Production-grade migration roadmap
@@ -139,11 +139,33 @@ processes.
 
 ### Example Output
 The orchestrator will:
-1. Fetch and summarize recent news articles
-2. Extract trends from the news content
-3. Analyze sentiment of the content
-4. Scrape competitor information from a predefined URL
+1. Fetch and summarize recent RSS excerpts
+2. Extract topics from the captured excerpts, with source IDs and evidence quotes
+3. Model-assess the tone of the news summaries
+4. Scrape competitor information from a predefined URL and record the retrieved source
 5. Display coordinated results from all agents
+
+### 🔎 Provenance and limits
+
+Every displayed item is tied to a captured source record:
+
+- **News** cards show the article ID, source URL when the feed supplies one, publication
+  and retrieval timestamps, content hash, and the exact RSS excerpt. The UI labels these as
+  excerpts, not full-article fetches. Missing URLs or publication times are shown explicitly.
+- **Topics** are extracted from one RSS snapshot. The UI calls them topics, shows the
+  publication window and source count, and does not claim a time-series trend. Each cited
+  quote is resolved against the captured excerpt: verified quotes are marked, and unknown
+  article IDs or non-verbatim quotes are marked unverified and surfaced as warnings.
+- **Model confidence** is the LLM's own 0–1 self-rating. It is not a calibrated probability.
+- **News tone** is a model assessment of the model-written summary. It is not consumer
+  sentiment, a survey, or a measured population opinion.
+- **Competitor sources** are built from the page actually retrieved (final URL, retrieval
+  time, content hash), not from links the model invents.
+
+> Schema note: this version stores `topics` and `tones` instead of the earlier `trends`
+> and `sentiments` fields. Reset old local checkpoint threads before using them with this
+> build.
+
 
 ## ⚙️ Configuration
 
@@ -247,13 +269,13 @@ The app labels it as **fixture data captured 2026-10-21 — not a live run**.
 
 ### Screenshots (1920×1080)
 
-| News | Trends |
+| News | Topics |
 |---|---|
-| ![News tab](docs/screenshots/01-news.png) | ![Trends tab](docs/screenshots/02-trends.png) |
+| ![News tab](docs/screenshots/01-news.png) | ![Topics tab](docs/screenshots/02-topics.png) |
 
-| Sentiment | Competitor approval (HITL) |
+| News tone | Competitor approval (HITL) |
 |---|---|
-| ![Sentiment tab](docs/screenshots/03-sentiment.png) | ![Competitor approval](docs/screenshots/04-competitors-approval.png) |
+| ![News tone tab](docs/screenshots/03-news-tone.png) | ![Competitor approval](docs/screenshots/04-competitors-approval.png) |
 
 ![Approved run](docs/screenshots/05-approved.png)
 
@@ -261,10 +283,10 @@ The app labels it as **fixture data captured 2026-10-21 — not a live run**.
 
 ```
 ┌─────────────────┐    ┌──────────────────┐    ┌─────────────────┐
-│  News Agent     │    │ Competitor Agent │    │  Trend Agent    │
+│  News Agent     │    │ Competitor Agent │    │  Topic Agent    │
 │                 │    │                  │    │                 │
-│ • RSS Parsing   │    │ • Web Scraping   │    │ • Keyword Freq  │
-│ • Summarization │    │ • Data Extraction│    │ • Pattern Detect│
+│ • RSS Parsing   │    │ • Web Scraping   │    │ • Source IDs    │
+│ • Summarization │    │ • Retrieved Src  │    │ • Evidence Check│
 └─────────┬───────┘    └────────┬─────────┘    └─────────┬───────┘
           │                     │                        │
           │              ┌──────▼──────┐                 │
@@ -275,10 +297,10 @@ The app labels it as **fixture data captured 2026-10-21 — not a live run**.
           │              └─────────────┘                 │
           │                                              │
 ┌─────────▼───────┐                              ┌───────▼─────────┐
-│ Sentiment Agent │                              │   Data Storage  │
+│ News Tone Agent │                              │   Data Storage  │
 │                 │                              │                 │
-│ • Text Analysis │                              │ • Results       │
-│ • Classification│                              │ • Insights      │
+│ • Summary Tone  │                              │ • Results       │
+│ • Aspect Tone   │                              │ • Insights      │
 └─────────────────┘                              └─────────────────┘
 ```
 

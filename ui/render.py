@@ -1,13 +1,13 @@
 """Streaming loop and tab rendering for the demo."""
 import streamlit as st
 
-from ui.components import competitors, news, sentiment, trends
+from ui.components import competitors, news, tone, topics
 
 NODE_LABELS = {
     "start_run": "Run start",
     "fetch_news": "News agent",
-    "identify_trends": "Trend agent",
-    "analyze_sentiment": "Sentiment agent",
+    "identify_topics": "Topic agent",
+    "analyze_news_tone": "News tone agent",
     "research_competitor": "Competitor agent",
     "review_profile": "Human review",
     "persist": "Persist",
@@ -17,10 +17,10 @@ NODE_LABELS = {
 def _describe(node: str, data: dict) -> str:
     if node == "fetch_news":
         return f"{len(data.get('summaries', []))} articles summarized"
-    if node == "identify_trends":
-        return f"{len(data.get('trends', []))} trends identified"
-    if node == "analyze_sentiment":
-        return f"{len(data.get('sentiments', []))} sentiment results"
+    if node == "identify_topics":
+        return f"{len(data.get('topics', []))} topics extracted"
+    if node == "analyze_news_tone":
+        return f"{len(data.get('tones', []))} tone results"
     if node == "research_competitor":
         profile = data.get("competitor")
         return f"profile built for {profile.company}" if profile else "profile built"
@@ -34,8 +34,8 @@ def view_from_snapshot(snapshot) -> dict:
     values = snapshot.values or {}
     return {
         "summaries": values.get("summaries", []),
-        "trends": values.get("trends", []),
-        "sentiments": values.get("sentiments", []),
+        "topics": values.get("topics", []),
+        "tones": values.get("tones", []),
         "competitor": values.get("competitor"),
         "status": values.get("status", "running"),
         "approved": values.get("approved"),
@@ -75,9 +75,9 @@ def render_tabs(tabs, state: dict, on_decision) -> None:
     with tabs[0]:
         news.render(state.get("summaries", []))
     with tabs[1]:
-        trends.render(state.get("trends", []))
+        topics.render(state.get("topics", []))
     with tabs[2]:
-        sentiment.render(state.get("sentiments", []))
+        tone.render(state.get("tones", []))
     with tabs[3]:
         competitors.render(
             state.get("competitor"),

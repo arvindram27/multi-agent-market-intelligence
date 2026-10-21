@@ -7,8 +7,8 @@ from langgraph.types import interrupt
 
 from market_intelligence.agents.competitor import fetch_and_analyze
 from market_intelligence.agents.news import ingest_news
-from market_intelligence.agents.sentiment import analyze_sentiment
-from market_intelligence.agents.trend import identify_trends
+from market_intelligence.agents.tone import analyze_news_tone
+from market_intelligence.agents.topics import identify_topics
 from market_intelligence.graph.state import MarketIntelligenceState
 from market_intelligence.persistence import NullProfileWriter, ProfileWriter
 
@@ -59,15 +59,19 @@ def fetch_news_node(
     return {"summaries": report.summaries, "warnings": report.warnings}
 
 
-def identify_trends_node(state: MarketIntelligenceState, llm=None) -> dict[str, Any]:
-    """Extract trends from the article summaries."""
-    return {"trends": identify_trends([s.summary for s in state.summaries], llm=llm)}
-
-
-def analyze_sentiment_node(state: MarketIntelligenceState, llm=None) -> dict[str, Any]:
-    """Classify sentiment for every article summary."""
+def identify_topics_node(state: MarketIntelligenceState, llm=None) -> dict[str, Any]:
+    """Extract topics and verify their cited evidence against captured excerpts."""
+    extraction = identify_topics(state.summaries, llm=llm)
     return {
-        "sentiments": [analyze_sentiment(s.summary, llm=llm) for s in state.summaries]
+        "topics": extraction.topics,
+        "warnings": state.warnings + extraction.warnings,
+    }
+
+
+def analyze_news_tone_node(state: MarketIntelligenceState, llm=None) -> dict[str, Any]:
+    """Classify the tone of every news summary."""
+    return {
+        "tones": [analyze_news_tone(summary, llm=llm) for summary in state.summaries]
     }
 
 
