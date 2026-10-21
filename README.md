@@ -121,6 +121,20 @@ The LLM agents (`src/market_intelligence/`) read settings from environment varia
 | `COMPETITOR_REQUEST_TIMEOUT` | `15.0` | Competitor page fetch timeout (seconds) |
 | `NUM_ARTICLES` | `2` | Articles processed per run |
 
+### 🔐 Secrets
+
+- **Never commit `.env`.** It is ignored via `.env*` (with a `!.env.example` exception);
+  the repository tracks placeholders only.
+- **Local development:** `cp .env.example .env`, then add the key. `.env` never leaves your
+  machine.
+- **Rotate immediately** if a key is ever pasted into chat, a log, or a ticket. Revoke it in
+  the provider console and issue a new one — deleting the file does not undo the exposure.
+- **Pre-commit guard:** after `pip install -e ".[dev]"`, run `pre-commit install` once.
+  `detect-secrets` (against `.secrets.baseline`) and `detect-private-key` then block staged
+  credentials. Run manually with `pre-commit run --all-files`.
+- **CI and deployed environments:** inject secrets from GitHub Actions secrets or a managed
+  store (e.g. OCI Vault). Do not ship `.env` files to servers.
+
 ### 💰 Cost per run
 
 **Measured** on 2026-10-21 with `gpt-4o-mini`, 2 BBC Business RSS articles, and
@@ -223,7 +237,9 @@ This project is designed as a comprehensive market intelligence solution. Future
 
 ## 🔐 Security & Privacy
 
-- Implement proper API key management
+- API keys live in `.env` locally and in a managed secret store when deployed — see
+  [Secrets](#-secrets).
+- Pre-commit hooks (`detect-secrets`, `detect-private-key`) block accidental commits.
 - Follow data privacy regulations (GDPR, CCPA)
 - Secure web scraping practices
 - Ethical AI model deployment
