@@ -13,8 +13,8 @@ A comprehensive multi-agent system designed to automate market intelligence gath
 - **Consumer Sentiment Analysis Agent**: Analyzes public sentiment using basic classification
 
 ### Orchestration
-- **Main Orchestrator**: Coordinates all agents in a unified workflow
-- **Data Processing Pipeline**: Sequential processing with inter-agent communication
+- **LangGraph workflow**: typed state, checkpointing, retries, and a human-in-the-loop approval gate
+- **Legacy orchestrator**: the original sequential MVP pipeline, kept as a runnable baseline
 
 ## 📁 Project Structure
 
@@ -30,6 +30,9 @@ A comprehensive multi-agent system designed to automate market intelligence gath
 │       └── sentiment_agent_mvp.py     # Sentiment analysis engine
 ├── orchestration/
 │   └── main_orchestrator_mvp.py       # Main coordination system
+├── src/market_intelligence/           # LLM agents + LangGraph workflow
+│   ├── agents/                        # news, trend, sentiment, competitor
+│   └── graph/                         # state, nodes, supervisor, serde
 ├── data/                              # Runtime output / cache
 ├── PRODUCTION_PLAN.md                 # Production-grade migration roadmap
 ├── page.tsx                           # Web UI component
@@ -57,13 +60,13 @@ A comprehensive multi-agent system designed to automate market intelligence gath
 - Rule-based sentiment classification
 - Sequential agent orchestration
 
-### Production Features (🚧 Planned — see `PRODUCTION_PLAN.md`)
-- **LLM agents** via LangChain (`init_chat_model` → OpenAI) with typed Pydantic structured output
-- **LangGraph** supervisor orchestration with checkpointing, retries, and human-in-the-loop
-- **Oracle Autonomous Database 23ai** persistence + AI Vector Search (RAG)
-- **Observability** via LangSmith + OpenTelemetry → Grafana Cloud
-- **Evaluation** via RAGAS + LangSmith datasets (offline + online)
-- **Streamlit demo UI** with live agent streaming
+### Production Features (🚧 In progress — see `PRODUCTION_PLAN.md`)
+- ✅ **LLM agents** via LangChain (`init_chat_model` → OpenAI) with typed Pydantic structured output
+- ✅ **LangGraph** orchestration with checkpointing, retries, and human-in-the-loop
+- 🚧 **Oracle Autonomous Database 23ai** persistence + AI Vector Search (RAG)
+- 🚧 **Observability** via LangSmith + OpenTelemetry → Grafana Cloud
+- 🚧 **Evaluation** via RAGAS + LangSmith datasets (offline + online)
+- 🚧 **Streamlit demo UI** with live agent streaming
 
 ## 🚀 Quick Start
 
@@ -99,6 +102,31 @@ python agents/consumer_sentiment_analysis_agent/sentiment_agent_mvp.py
 # Run complete orchestrated system (from the repo root)
 python -m orchestration.main_orchestrator_mvp
 ```
+
+### LangGraph workflow (Phase 2)
+
+```python
+from langgraph.checkpoint.memory import InMemorySaver
+from langgraph.types import Command
+from market_intelligence.graph import build_graph
+
+graph = build_graph(checkpointer=InMemorySaver())
+config = {"configurable": {"thread_id": "demo-1"}}
+
+graph.invoke(
+    {
+        "rss_url": "https://feeds.bbci.co.uk/news/business/rss.xml",
+        "competitor_url": "https://www.google.com/about/",
+        "num_articles": 2,
+    },
+    config,
+)  # pauses at review_profile
+
+graph.invoke(Command(resume={"approved": True}), config)
+```
+
+The run pauses before the competitor profile is persisted; resume with approval or rejection.
+`SqliteSaver` (from `langgraph.checkpoint.sqlite`) keeps checkpoints across processes.
 
 ### Example Output
 The orchestrator will:
