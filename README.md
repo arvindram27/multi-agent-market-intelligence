@@ -1,5 +1,7 @@
 # Multi-Agent AI Ecosystem for Market Intelligence
 
+[![CI](https://img.shields.io/github/actions/workflow/status/arvindram27/multi-agent-market-intelligence/ci.yml?branch=main&label=CI)](https://github.com/arvindram27/multi-agent-market-intelligence/actions/workflows/ci.yml)
+
 A comprehensive multi-agent system designed to automate market intelligence gathering, processing, and analysis. This project implements specialized AI agents that work together to provide insights from RSS news excerpts, competitor pages, extracted topics, and model-assessed news tone.
 
 > 📄 **Production roadmap:** see [`PRODUCTION_PLAN.md`](./PRODUCTION_PLAN.md) for the full migration plan (LangGraph · LangChain · Oracle 23ai · LangSmith · Grafana · RAGAS).
@@ -166,6 +168,28 @@ Every displayed item is tied to a captured source record:
 > and `sentiments` fields. Reset old local checkpoint threads before using them with this
 > build.
 
+
+## ✅ CI and evaluation
+
+CI runs on every push/PR (`.github/workflows/ci.yml`): the offline pytest suite on Python
+3.11/3.12/3.13 with `pip install -e ".[dev,demo]"`, pre-commit hooks (secret scan), and a
+regeneration check of the committed evaluation summary.
+
+Evaluation lives in `evals/`:
+
+```bash
+python evals/run_evals.py          # offline; rewrites evals/summary.{json,md} deterministically
+python evals/run_evals.py --live   # optional; needs OPENAI_API_KEY, calls the shipped LLM agents
+```
+
+- `evals/dataset.jsonl` holds 49 labeled cases across four categories: `tone`,
+  `evidence_support`, `unsupported_company_claims` and `factuality`.
+- The offline run scores them with the legacy keyword baseline and the shipped
+  deterministic verifiers (verbatim quote check, token-coverage grounding). The committed
+  `evals/summary.md` is the current reproducible result; CI fails if it goes stale.
+- `--live` records model name, prompt version and per-case latency. Token totals and cost
+  are recorded only from real usage, priced at measured unit prices
+  (`gpt-4o-mini`: $0.15/1M input, $0.60/1M output). Nothing is estimated offline.
 
 ## ⚙️ Configuration
 

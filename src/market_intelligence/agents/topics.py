@@ -32,6 +32,12 @@ def _normalize(text: str) -> str:
     return _WHITESPACE_RE.sub(" ", (text or "").casefold()).strip()
 
 
+def verify_quote(quote: str, excerpt: str) -> bool:
+    """Return True when ``quote`` appears verbatim (ignoring case/whitespace) in ``excerpt``."""
+    quote = (quote or "").strip()
+    return bool(quote) and _normalize(quote) in _normalize(excerpt or "")
+
+
 def _window(summaries: list[NewsSummary]) -> tuple[str | None, str | None]:
     dates = sorted(item.published_at for item in summaries if item.published_at)
     if not dates:
@@ -63,7 +69,7 @@ def _resolve_evidence(
             continue
 
         quote = (citation.quote or "").strip()
-        verified = bool(quote) and _normalize(quote) in _normalize(source.excerpt)
+        verified = verify_quote(quote, source.excerpt)
         if not verified:
             warnings.append(
                 f"Topic {finding.topic_name!r}: quote was not found verbatim in "

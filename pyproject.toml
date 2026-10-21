@@ -23,6 +23,7 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
     "pytest==9.1.1",
+    "pytest-socket==0.8.1",
     "pre-commit==4.7.0",
     "detect-secrets==1.5.0",
 ]
@@ -37,3 +38,6 @@ packages = ["src/market_intelligence"]
 [tool.pytest.ini_options]
 pythonpath = ["src", "."]
 testpaths = ["tests"]
+markers = [
+    "enable_socket: test needs a local socket (asyncio socketpair), but performs no network I/O",
+]
