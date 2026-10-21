@@ -6,6 +6,7 @@ from market_intelligence.agents.trend import identify_trends
 from market_intelligence.agents.schemas import (
     CompetitorProfile,
     NewsSummary,
+    SentimentAspect,
     SentimentResult,
     TrendAnalysis,
     TrendReport,
@@ -29,7 +30,11 @@ def test_identify_trends_returns_schema(fake_llm):
 
 
 def test_analyze_sentiment_returns_schema(fake_llm):
-    expected = SentimentResult(overall="positive", score=0.8, aspects=[{"aspect": "quality"}])
+    expected = SentimentResult(
+        overall="positive",
+        score=0.8,
+        aspects=[SentimentAspect(aspect="quality", sentiment="positive", score=0.7)],
+    )
     llm = fake_llm({SentimentResult: expected})
     result = analyze_sentiment("great product", llm=llm)
     assert result == expected

@@ -28,12 +28,20 @@ class TrendAnalysis(BaseModel):
     trends: list[TrendReport] = Field(default_factory=list)
 
 
+class SentimentAspect(BaseModel):
+    """A single aspect-level sentiment observation."""
+
+    aspect: str
+    sentiment: Literal["positive", "negative", "neutral", "mixed"]
+    score: float = Field(ge=-1.0, le=1.0)
+
+
 class SentimentResult(BaseModel):
     """Structured sentiment classification of a text."""
 
     overall: Literal["positive", "negative", "neutral", "mixed"]
     score: float = Field(ge=-1.0, le=1.0)
-    aspects: list[dict] = Field(default_factory=list)
+    aspects: list[SentimentAspect] = Field(default_factory=list)
 
 
 class CompetitorProfile(BaseModel):
