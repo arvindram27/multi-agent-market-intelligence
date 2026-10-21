@@ -1,6 +1,5 @@
 """Orchestrator wiring test: pipeline chains all four agents with mocked HTTP/RSS."""
-from types import SimpleNamespace
-
+from market_intelligence.net import FetchResult
 from market_intelligence.orchestration import run_pipeline
 from market_intelligence.agents.schemas import (
     CompetitorProfile,
@@ -10,20 +9,25 @@ from market_intelligence.agents.schemas import (
     TrendReport,
 )
 
+FEED_XML = b"""<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0"><channel><title>Test feed</title>
+<item><title>T1</title><description>content one is a sufficiently long RSS excerpt for summarization</description></item>
+</channel></rss>"""
+
 
 def test_run_pipeline_wires_agents(fake_llm, monkeypatch):
-    # Mock RSS feed
-    fake_feed = SimpleNamespace(
-        entries=[SimpleNamespace(title="T1", summary="<p>content one</p>")]
-    )
-    monkeypatch.setattr("feedparser.parse", lambda url: fake_feed)
+    def fake_fetch(url, **kwargs):
+        if "feed" in url:
+            return FetchResult(url, FEED_XML, "application/rss+xml", 200)
+        return FetchResult(
+            url,
+            b"<html><body>Acme corp is a leading widget maker.</body></html>",
+            "text/html",
+            200,
+        )
 
-    # Mock HTTP (competitor page)
-    fake_resp = SimpleNamespace(
-        content=b"<html><body>Acme corp</body></html>",
-        raise_for_status=lambda: None,
-    )
-    monkeypatch.setattr("requests.get", lambda url, **kw: fake_resp)
+    monkeypatch.setattr("market_intelligence.agents.news.fetch_bytes", fake_fetch)
+    monkeypatch.setattr("market_intelligence.agents.competitor.fetch_bytes", fake_fetch)
 
     responses = {
         NewsSummary: NewsSummary(headline="h", summary="s1", sentiment_hint="neutral"),

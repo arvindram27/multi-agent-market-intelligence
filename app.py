@@ -108,6 +108,8 @@ if decision_error:
 if state:
     status = state.get("status", "running")
     st.caption(f"Status: **{status}**")
+    for warning in state.get("warnings", []):
+        st.warning(warning)
     if status == "persist_failed":
         detail = state.get("error") or ""
         st.error(f"Persistence failed — nothing was saved. {detail}".strip())

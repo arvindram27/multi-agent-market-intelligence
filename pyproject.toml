@@ -16,6 +16,7 @@ dependencies = [
     "langchain-openai==1.7.1",
     "langgraph==1.2.15",
     "langgraph-checkpoint-sqlite==3.1.2",
+    "openai==3.29.0",
     "pydantic-settings==2.15.0",
 ]
 

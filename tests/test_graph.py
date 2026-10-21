@@ -1,6 +1,5 @@
 """LangGraph workflow tests: fan-out, HITL interrupt/resume, streaming, persistence."""
 import sqlite3
-from types import SimpleNamespace
 
 import pytest
 from langgraph.checkpoint.memory import InMemorySaver
@@ -14,8 +13,15 @@ from market_intelligence.agents.schemas import (
     TrendAnalysis,
     TrendReport,
 )
+from market_intelligence.budget import TokenBudgetExceeded
 from market_intelligence.graph import build_graph, checkpoint_serde
 from market_intelligence.graph.nodes import InvalidDecisionError, parse_decision
+from market_intelligence.net import FetchResult
+
+FEED_XML = b"""<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0"><channel><title>Test feed</title>
+<item><title>T1</title><description>content one is a sufficiently long RSS excerpt for summarization</description></item>
+</channel></rss>"""
 
 
 def _responses():
@@ -30,16 +36,20 @@ def _responses():
 
 
 def _mock_io(monkeypatch):
-    """Mock the two external calls (RSS + competitor page)."""
-    fake_feed = SimpleNamespace(
-        entries=[SimpleNamespace(title="T1", summary="<p>content one</p>")]
-    )
-    monkeypatch.setattr("feedparser.parse", lambda url: fake_feed)
-    fake_resp = SimpleNamespace(
-        content=b"<html><body>Acme corp</body></html>",
-        raise_for_status=lambda: None,
-    )
-    monkeypatch.setattr("requests.get", lambda url, **kw: fake_resp)
+    """Mock the bounded fetcher for RSS and competitor pages (no network)."""
+
+    def fake_fetch(url, **kwargs):
+        if "feed" in url:
+            return FetchResult(url, FEED_XML, "application/rss+xml", 200)
+        return FetchResult(
+            url,
+            b"<html><body>Acme corp is a leading widget maker.</body></html>",
+            "text/html",
+            200,
+        )
+
+    monkeypatch.setattr("market_intelligence.agents.news.fetch_bytes", fake_fetch)
+    monkeypatch.setattr("market_intelligence.agents.competitor.fetch_bytes", fake_fetch)
 
 
 def _inputs():
@@ -91,6 +101,21 @@ def test_graph_runs_to_approval_interrupt(fake_llm, monkeypatch):
     assert values["summaries"][0].summary == "s1"
     assert values["trends"][0].trend_name == "AI"
     assert values["sentiments"][0].overall == "positive"
+
+
+def test_run_call_ceiling_stops_the_graph(fake_llm, monkeypatch):
+    _mock_io(monkeypatch)
+    graph = build_graph(
+        checkpointer=_memory_saver(),
+        llm=fake_llm(_responses()),
+        max_run_llm_calls=1,
+    )
+
+    with pytest.raises(TokenBudgetExceeded, match="1-call"):
+        graph.invoke(_inputs(), _config("budget-run"))
+
+    snap = graph.get_state(_config("budget-run"))
+    assert snap.next != ("review_profile",)
 
 
 def test_graph_completes_on_approval(fake_llm, monkeypatch):

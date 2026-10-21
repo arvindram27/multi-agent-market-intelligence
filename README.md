@@ -148,15 +148,47 @@ The orchestrator will:
 ## ⚙️ Configuration
 
 The LLM agents (`src/market_intelligence/`) read settings from environment variables or a
-`.env` file (copy `.env.example` to `.env`). Model name and timeouts are configurable:
+`.env` file (copy `.env.example` to `.env`). Model, network limits and run ceilings are
+configurable:
 
 | Variable | Default | Purpose |
 |---|---|---|
 | `OPENAI_API_KEY` | _(empty)_ | OpenAI API key (required for live LLM runs) |
 | `OPENAI_MODEL` | `gpt-4o-mini` | Model used by all agents |
-| `NEWS_REQUEST_TIMEOUT` | `15.0` | RSS fetch timeout (seconds) |
-| `COMPETITOR_REQUEST_TIMEOUT` | `15.0` | Competitor page fetch timeout (seconds) |
-| `NUM_ARTICLES` | `2` | Articles processed per run |
+| `NEWS_REQUEST_TIMEOUT` | `15.0` | RSS request timeout (seconds, connect + read) |
+| `COMPETITOR_REQUEST_TIMEOUT` | `15.0` | Competitor page request timeout (seconds) |
+| `MAX_REDIRECTS` | `3` | Redirects followed, each target revalidated |
+| `NUM_ARTICLES` | `2` | Articles processed per run (1–10) |
+| `MAX_ARTICLES` | `10` | Hard upper bound for `NUM_ARTICLES` |
+| `MIN_ARTICLE_CHARS` | `40` | Minimum RSS excerpt length before an article is skipped |
+| `MAX_FEED_BYTES` | `2000000` | Maximum RSS body size |
+| `MAX_PAGE_BYTES` | `1000000` | Maximum competitor page size |
+| `MAX_COMPETITOR_CHARS` | `8000` | Page text sent to the model |
+| `LLM_REQUEST_TIMEOUT` | `30.0` | Per-request LLM timeout (seconds) |
+| `LLM_MAX_OUTPUT_TOKENS` | `512` | Output-token cap per LLM call |
+| `MAX_RUN_TOKENS` | `20000` | Per-run token ceiling (fails closed when usage is reported) |
+| `MAX_RUN_LLM_CALLS` | `24` | Per-run LLM call ceiling |
+
+### 🛡️ Ingestion safety
+
+All RSS and competitor fetches go through one bounded client (`src/market_intelligence/net.py`):
+
+- Only `http`/`https` URLs on ports 80/443 are allowed; embedded credentials are rejected.
+- The host is resolved and every address must be globally routable. Redirect targets are
+  revalidated, so a public URL cannot redirect the app to `localhost`, a private network, or
+  a cloud metadata endpoint.
+- Status, content type, redirect count and body size are checked before parsing.
+- Feeds are parsed from bounded bytes. Malformed or empty feeds fail with a clear error;
+  short/unusable excerpts are skipped with a visible warning instead of being sent to the
+  model.
+- LangGraph retries only transient failures (timeouts, connection errors, 429 and 5xx). A
+  malformed feed, SSRF rejection or 4xx response is permanent and is not retried.
+- Each run has a call ceiling and, when the provider reports usage, a token ceiling. Exceeding
+  either fails the run instead of continuing to spend.
+
+> SSRF note: validation resolves DNS and the HTTP client resolves again. A determined
+> DNS-rebinding attack could still swap the address between lookups. Pin the connection to the
+> validated IP, or use an egress proxy, before exposing this app to untrusted users.
 
 ### 🔐 Secrets
 

@@ -50,6 +50,7 @@ def load_fixture(path: Path = FIXTURE_PATH) -> dict:
         "competitor": CompetitorProfile(**state["competitor"]),
         "status": state.get("status", "awaiting_approval"),
         "approved": state.get("approved"),
+        "warnings": state.get("warnings", []),
         "pending": state.get("status") == "awaiting_approval",
         "fixture_date": payload.get("captured_at"),
     }
