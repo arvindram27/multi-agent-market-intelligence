@@ -1,8 +1,12 @@
 """LangGraph supervisor graph for the market-intelligence workflow.
 
 The graph is deterministic: news -> (trends || sentiment) -> competitor -> HITL review
--> persist. ``interrupt()`` in the review node makes the run resumable from a checkpoint,
-which is what the Streamlit approval button and the future Oracle persistence rely on.
+-> persist. ``interrupt()`` in the review node makes the run resumable from a checkpoint.
+Approval gates **business persistence/export**, not checkpoint storage: the checkpoint
+already contains the pending profile.
+
+A rejected run goes straight to ``END`` and never reaches the writer. An invalid resume
+payload re-interrupts the review node rather than approving by coercion.
 """
 from functools import partial
 
@@ -19,12 +23,24 @@ from market_intelligence.graph.nodes import (
     review_profile_node,
 )
 from market_intelligence.graph.state import MarketIntelligenceState
+from market_intelligence.persistence import NullProfileWriter, ProfileWriter
 
 # Network/LLM nodes retry with exponential backoff before failing the run.
 RETRY_POLICY = RetryPolicy(max_attempts=3, initial_interval=0.5, backoff_factor=2.0)
 
 
-def build_graph(checkpointer: BaseCheckpointSaver | None = None, llm=None):
+def route_after_review(state: MarketIntelligenceState) -> str:
+    """Route an explicit decision; a missing one returns to the interrupt."""
+    if state.approved is None:
+        return "review"
+    return "persist" if state.approved else "rejected"
+
+
+def build_graph(
+    checkpointer: BaseCheckpointSaver | None = None,
+    llm=None,
+    writer: ProfileWriter | None = None,
+):
     """Compile the workflow.
 
     Args:
@@ -33,6 +49,9 @@ def build_graph(checkpointer: BaseCheckpointSaver | None = None, llm=None):
             Postgres/Oracle saver in production.
         llm: Optional injected chat model (tests pass a fake). When omitted the agents
             build one from settings via ``get_llm()``.
+        writer: Business-persistence implementation for approved runs. Defaults to
+            ``NullProfileWriter`` until the durable store lands; tests inject a spy
+            to prove rejection never reaches it.
     """
     graph = StateGraph(MarketIntelligenceState)
 
@@ -57,7 +76,7 @@ def build_graph(checkpointer: BaseCheckpointSaver | None = None, llm=None):
         retry_policy=RETRY_POLICY,
     )
     graph.add_node("review_profile", review_profile_node)
-    graph.add_node("persist", persist_node)
+    graph.add_node("persist", partial(persist_node, writer=writer or NullProfileWriter()))
 
     graph.add_edge(START, "fetch_news")
     # Fan out: trends and sentiment both consume the summaries and run in parallel.
@@ -67,7 +86,12 @@ def build_graph(checkpointer: BaseCheckpointSaver | None = None, llm=None):
     graph.add_edge("identify_trends", "research_competitor")
     graph.add_edge("analyze_sentiment", "research_competitor")
     graph.add_edge("research_competitor", "review_profile")
-    graph.add_edge("review_profile", "persist")
+    # Approval gate: only an explicit approval may reach the business writer.
+    graph.add_conditional_edges(
+        "review_profile",
+        route_after_review,
+        {"review": "review_profile", "persist": "persist", "rejected": END},
+    )
     graph.add_edge("persist", END)
 
     return graph.compile(checkpointer=checkpointer)
