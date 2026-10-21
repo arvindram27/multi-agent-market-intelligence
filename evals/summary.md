@@ -1,6 +1,6 @@
 # Evaluation summary (offline, reproducible)
 
-Harness: `evals/run_evals.py` v0.1 · dataset digest `5RWCKA5VJB5NKFOI` · 49 labeled cases
+Harness: `evals/run_evals.py` v0.1 · dataset digest `LQ2DUROOES2EQAHG` · 49 labeled cases
 
 Scoring system: **legacy-deterministic-baseline (offline)** — deterministic keyword baseline and the shipped verifiers (verbatim quote check, token-coverage grounding). No LLM calls, no cost.
 

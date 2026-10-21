@@ -79,10 +79,12 @@ def load_dataset(path: Path = DATASET_PATH) -> list[dict]:
 
 
 def dataset_sha256(path: Path = DATASET_PATH) -> str:
-    """Dataset digest as base32 (10 bytes): deterministic and uniquely restarts the
-    stale check whenever the dataset changes; base32 avoids hex-entropy false
-    positives in the secret scanner."""
-    digest = hashlib.sha256(path.read_bytes()).digest()
+    """Dataset digest as base32 (10 bytes): deterministic and inspected-to-change
+    whenever the dataset changes; base32 dodges hex-entropy false positives in the
+    secret scanner. Newlines are normalized so Windows/Linux checkouts hash the
+    same logical content."""
+    normalized = path.read_text(encoding="utf-8")
+    digest = hashlib.sha256(normalized.encode("utf-8")).digest()
     return base64.b32encode(digest[:10]).decode("ascii")
 
 

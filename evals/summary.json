@@ -1,6 +1,6 @@
 {
   "harness_version": "0.1",
-  "dataset_sha256": "5RWCKA5VJB5NKFOI",
+  "dataset_sha256": "LQ2DUROOES2EQAHG",
   "cases": 49,
   "model": "legacy-deterministic-baseline (offline)",
   "prompt_version": "agent-inline-prompts@1",
