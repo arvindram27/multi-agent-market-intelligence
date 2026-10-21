@@ -7,11 +7,11 @@ from langgraph.checkpoint.sqlite import SqliteSaver
 from langgraph.types import Command
 
 from market_intelligence.agents.schemas import (
-    CompetitorProfile,
-    NewsSummary,
-    SentimentResult,
-    TrendAnalysis,
-    TrendReport,
+    CompetitorProfileDraft,
+    NewsDigest,
+    NewsToneDraft,
+    TopicAnalysis,
+    TopicFinding,
 )
 from market_intelligence.budget import TokenBudgetExceeded
 from market_intelligence.graph import build_graph, checkpoint_serde
@@ -26,12 +26,14 @@ FEED_XML = b"""<?xml version="1.0" encoding="UTF-8"?>
 
 def _responses():
     return {
-        NewsSummary: NewsSummary(headline="h", summary="s1", sentiment_hint="neutral"),
-        TrendAnalysis: TrendAnalysis(
-            trends=[TrendReport(trend_name="AI", confidence=0.8)]
+        NewsDigest: NewsDigest(headline="h", summary="s1", tone_hint="neutral"),
+        TopicAnalysis: TopicAnalysis(
+            topics=[TopicFinding(topic_name="AI", model_confidence=0.8)]
         ),
-        SentimentResult: SentimentResult(overall="positive", score=0.5),
-        CompetitorProfile: CompetitorProfile(company="Acme", positioning="leader"),
+        NewsToneDraft: NewsToneDraft(overall="positive", score=0.5),
+        CompetitorProfileDraft: CompetitorProfileDraft(
+            company="Acme", positioning="leader"
+        ),
     }
 
 
@@ -99,8 +101,8 @@ def test_graph_runs_to_approval_interrupt(fake_llm, monkeypatch):
     assert values["status"] == "awaiting_approval"
     assert values["competitor"].company == "Acme"
     assert values["summaries"][0].summary == "s1"
-    assert values["trends"][0].trend_name == "AI"
-    assert values["sentiments"][0].overall == "positive"
+    assert values["topics"][0].topic_name == "AI"
+    assert values["tones"][0].overall == "positive"
 
 
 def test_run_call_ceiling_stops_the_graph(fake_llm, monkeypatch):
@@ -269,7 +271,7 @@ def test_graph_streams_node_updates_once_each(fake_llm, monkeypatch):
     chunks = list(graph.stream(_inputs(), _config("stream"), stream_mode="updates"))
     names = {name for chunk in chunks for name in chunk}
 
-    assert {"fetch_news", "identify_trends", "analyze_sentiment"} <= names
+    assert {"fetch_news", "identify_topics", "analyze_news_tone"} <= names
     # Fan-in: the competitor node must run exactly once after both branches.
     assert sum(1 for chunk in chunks if "research_competitor" in chunk) == 1
 

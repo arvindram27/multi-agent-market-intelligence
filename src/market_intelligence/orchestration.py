@@ -1,12 +1,12 @@
 """Linear orchestration wiring for the market intelligence agents.
 
-Phase 1 keeps orchestration as a plain sequential function. A LangGraph supervisor
-(Phase 2) will replace this once checkpointing and human-in-the-loop are added.
+The LangGraph supervisor is the main entry point. This sequential function is a
+small legacy baseline used by tests and the old CLI path.
 """
 from market_intelligence.agents.competitor import fetch_and_analyze
 from market_intelligence.agents.news import fetch_and_summarize
-from market_intelligence.agents.sentiment import analyze_sentiment
-from market_intelligence.agents.trend import identify_trends
+from market_intelligence.agents.tone import analyze_news_tone
+from market_intelligence.agents.topics import identify_topics
 
 
 def run_pipeline(
@@ -15,15 +15,15 @@ def run_pipeline(
     num_articles: int | None = None,
     llm=None,
 ) -> dict:
-    """Run the full market-intelligence pipeline and return structured results."""
+    """Run the full pipeline and return summaries, topics, tones and competitor."""
     summaries = fetch_and_summarize(rss_url, num_articles=num_articles, llm=llm)
-    summary_texts = [s.summary for s in summaries]
-    trends = identify_trends(summary_texts, llm=llm)
-    sentiments = [analyze_sentiment(text, llm=llm) for text in summary_texts]
+    topic_extraction = identify_topics(summaries, llm=llm)
+    tones = [analyze_news_tone(summary, llm=llm) for summary in summaries]
     competitor = fetch_and_analyze(competitor_url, llm=llm)
     return {
         "summaries": summaries,
-        "trends": trends,
-        "sentiments": sentiments,
+        "topics": topic_extraction.topics,
+        "tones": tones,
         "competitor": competitor,
+        "warnings": topic_extraction.warnings,
     }

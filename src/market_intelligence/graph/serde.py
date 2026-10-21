@@ -10,7 +10,12 @@ from market_intelligence.agents import schemas
 
 ALLOWED_MSGPACK_MODULES = [
     (schemas.__name__, name)
-    for name in ("NewsSummary", "SentimentResult", "TrendReport", "CompetitorProfile")
+    for name in (
+        "NewsSummary",
+        "TopicReport",
+        "NewsTone",
+        "CompetitorProfile",
+    )
 ]
 
 

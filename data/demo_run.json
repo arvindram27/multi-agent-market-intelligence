@@ -1,6 +1,6 @@
 {
   "captured_at": "2026-10-21",
-  "label": "Fixture snapshot — deterministic demo data, not a live run",
+  "label": "Fixture snapshot - deterministic demo data, not a live run",
   "inputs": {
     "rss_url": "https://feeds.bbci.co.uk/news/business/rss.xml",
     "competitor_url": "https://acme-health.example.com/about",
@@ -18,7 +18,16 @@
           "Clinicians keep final sign-off on every triage decision",
           "Initial waiting-time reduction of 11% in the pilot cohort"
         ],
-        "sentiment_hint": "positive"
+        "tone_hint": "positive",
+        "source_title": "NHS trusts begin piloting AI triage assistants",
+        "source_url": "https://www.bbc.co.uk/news/business-00000001",
+        "published_at": "2026-10-19T08:00:00+00:00",
+        "excerpt": "Three NHS trusts are trialling AI triage assistants to prioritise non-urgent appointments, with clinicians retaining final sign-off. Early results suggest shorter waiting lists but mixed staff feedback on workload.",
+        "article_id": "23b190c1191169a0",
+        "feed_url": "https://feeds.bbci.co.uk/news/business/rss.xml",
+        "retrieved_at": "2026-10-21T10:00:00+00:00",
+        "content_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "content_kind": "rss_excerpt"
       },
       {
         "headline": "Regulators publish first code of practice for clinical AI",
@@ -28,7 +37,16 @@
           "Requires post-market monitoring and incident reporting",
           "Compliance window runs through the next financial year"
         ],
-        "sentiment_hint": "neutral"
+        "tone_hint": "neutral",
+        "source_title": "Regulators publish first code of practice for clinical AI",
+        "source_url": "https://www.bbc.co.uk/news/business-00000002",
+        "published_at": "2026-10-20T09:30:00+00:00",
+        "excerpt": "A new code of practice sets expectations for validation, audit trails, and post-market monitoring of clinical AI tools. Vendors will need documented evidence of safety and bias testing before deployment.",
+        "article_id": "ae57d8dcfca7e700",
+        "feed_url": "https://feeds.bbci.co.uk/news/business/rss.xml",
+        "retrieved_at": "2026-10-21T10:00:00+00:00",
+        "content_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "content_kind": "rss_excerpt"
       },
       {
         "headline": "Health AI startup Acme raises £40m Series B",
@@ -38,71 +56,181 @@
           "Expansion into two European markets planned",
           "Headcount to grow 60% over the next year"
         ],
-        "sentiment_hint": "positive"
+        "tone_hint": "positive",
+        "source_title": "Health AI startup Acme raises £40m Series B",
+        "source_url": "https://www.bbc.co.uk/news/business-00000003",
+        "published_at": "2026-10-21T07:15:00+00:00",
+        "excerpt": "Acme Health AI raised £40m to expand its clinical documentation copilot across NHS trusts and into two European markets. The company says the round will fund integrations and a larger clinical safety team.",
+        "article_id": "b93fca1743c77e85",
+        "feed_url": "https://feeds.bbci.co.uk/news/business/rss.xml",
+        "retrieved_at": "2026-10-21T10:00:00+00:00",
+        "content_hash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "content_kind": "rss_excerpt"
       }
     ],
-    "trends": [
+    "topics": [
       {
-        "trend_name": "Clinical workflow automation",
-        "keywords": ["triage", "documentation", "NHS", "clinician sign-off"],
-        "confidence": 0.86,
+        "topic_name": "Clinical workflow automation",
+        "keywords": [
+          "triage",
+          "documentation",
+          "NHS",
+          "clinician sign-off"
+        ],
+        "model_confidence": 0.86,
         "evidence": [
-          "NHS trusts are piloting AI triage across roughly 120,000 appointments",
-          "Acme is expanding a clinical documentation copilot across trusts",
-          "All pilots keep a clinician in the approval loop"
-        ]
+          {
+            "article_id": "23b190c1191169a0",
+            "quote": "Three NHS trusts are trialling AI triage assistants",
+            "source_title": "NHS trusts begin piloting AI triage assistants",
+            "source_url": "https://www.bbc.co.uk/news/business-00000001",
+            "published_at": "2026-10-19T08:00:00+00:00",
+            "verified": true
+          },
+          {
+            "article_id": "b93fca1743c77e85",
+            "quote": "expand its clinical documentation copilot across NHS trusts",
+            "source_title": "Health AI startup Acme raises £40m Series B",
+            "source_url": "https://www.bbc.co.uk/news/business-00000003",
+            "published_at": "2026-10-21T07:15:00+00:00",
+            "verified": true
+          }
+        ],
+        "window_start": "2026-10-19T08:00:00+00:00",
+        "window_end": "2026-10-21T07:15:00+00:00",
+        "source_count": 3
       },
       {
-        "trend_name": "Regulatory scrutiny of medical AI",
-        "keywords": ["code of practice", "validation", "post-market monitoring", "bias testing"],
-        "confidence": 0.74,
+        "topic_name": "Regulatory scrutiny of medical AI",
+        "keywords": [
+          "code of practice",
+          "validation",
+          "post-market monitoring",
+          "bias testing"
+        ],
+        "model_confidence": 0.74,
         "evidence": [
-          "Regulators published a code of practice covering validation and audit trails",
-          "Vendors must document safety and bias testing before deployment",
-          "Post-market monitoring is now an explicit requirement"
-        ]
+          {
+            "article_id": "ae57d8dcfca7e700",
+            "quote": "A new code of practice sets expectations for validation",
+            "source_title": "Regulators publish first code of practice for clinical AI",
+            "source_url": "https://www.bbc.co.uk/news/business-00000002",
+            "published_at": "2026-10-20T09:30:00+00:00",
+            "verified": true
+          },
+          {
+            "article_id": "23b190c1191169a0",
+            "quote": "clinicians retaining final sign-off",
+            "source_title": "NHS trusts begin piloting AI triage assistants",
+            "source_url": "https://www.bbc.co.uk/news/business-00000001",
+            "published_at": "2026-10-19T08:00:00+00:00",
+            "verified": true
+          }
+        ],
+        "window_start": "2026-10-19T08:00:00+00:00",
+        "window_end": "2026-10-21T07:15:00+00:00",
+        "source_count": 3
       },
       {
-        "trend_name": "Consolidation in health-tech funding",
-        "keywords": ["Series B", "expansion", "European markets"],
-        "confidence": 0.68,
+        "topic_name": "Health-tech funding and expansion",
+        "keywords": [
+          "Series B",
+          "expansion",
+          "European markets"
+        ],
+        "model_confidence": 0.68,
         "evidence": [
-          "Acme raised £40m to expand into two European markets",
-          "Funding is concentrated in vendors with clinical safety teams"
-        ]
+          {
+            "article_id": "b93fca1743c77e85",
+            "quote": "Acme Health AI raised £40m",
+            "source_title": "Health AI startup Acme raises £40m Series B",
+            "source_url": "https://www.bbc.co.uk/news/business-00000003",
+            "published_at": "2026-10-21T07:15:00+00:00",
+            "verified": true
+          }
+        ],
+        "window_start": "2026-10-19T08:00:00+00:00",
+        "window_end": "2026-10-21T07:15:00+00:00",
+        "source_count": 3
       }
     ],
-    "sentiments": [
+    "tones": [
       {
         "overall": "positive",
         "score": 0.62,
         "aspects": [
-          {"aspect": "patient outcomes", "sentiment": "positive", "score": 0.7},
-          {"aspect": "staff workload", "sentiment": "positive", "score": 0.4},
-          {"aspect": "clinical control", "sentiment": "positive", "score": 0.55}
-        ]
+          {
+            "aspect": "patient outcomes",
+            "tone": "positive",
+            "score": 0.7
+          },
+          {
+            "aspect": "staff workload",
+            "tone": "positive",
+            "score": 0.4
+          },
+          {
+            "aspect": "clinical control",
+            "tone": "positive",
+            "score": 0.55
+          }
+        ],
+        "article_id": "23b190c1191169a0",
+        "headline": "NHS trusts begin piloting AI triage assistants",
+        "source_url": "https://www.bbc.co.uk/news/business-00000001",
+        "published_at": "2026-10-19T08:00:00+00:00",
+        "retrieved_at": "2026-10-21T10:00:00+00:00"
       },
       {
         "overall": "neutral",
         "score": 0.05,
         "aspects": [
-          {"aspect": "compliance burden", "sentiment": "mixed", "score": -0.1},
-          {"aspect": "patient safety", "sentiment": "positive", "score": 0.3}
-        ]
+          {
+            "aspect": "compliance burden",
+            "tone": "mixed",
+            "score": -0.1
+          },
+          {
+            "aspect": "patient safety",
+            "tone": "positive",
+            "score": 0.3
+          }
+        ],
+        "article_id": "ae57d8dcfca7e700",
+        "headline": "Regulators publish first code of practice for clinical AI",
+        "source_url": "https://www.bbc.co.uk/news/business-00000002",
+        "published_at": "2026-10-20T09:30:00+00:00",
+        "retrieved_at": "2026-10-21T10:00:00+00:00"
       },
       {
         "overall": "positive",
         "score": 0.71,
         "aspects": [
-          {"aspect": "investor confidence", "sentiment": "positive", "score": 0.8},
-          {"aspect": "market competition", "sentiment": "negative", "score": -0.2}
-        ]
+          {
+            "aspect": "investor confidence",
+            "tone": "positive",
+            "score": 0.8
+          },
+          {
+            "aspect": "market competition",
+            "tone": "negative",
+            "score": -0.2
+          }
+        ],
+        "article_id": "b93fca1743c77e85",
+        "headline": "Health AI startup Acme raises £40m Series B",
+        "source_url": "https://www.bbc.co.uk/news/business-00000003",
+        "published_at": "2026-10-21T07:15:00+00:00",
+        "retrieved_at": "2026-10-21T10:00:00+00:00"
       }
     ],
     "competitor": {
       "company": "Acme Health AI",
       "positioning": "Enterprise clinical documentation copilot for NHS trusts, sold as a per-seat SaaS with an implementation package.",
-      "products": ["Acme Scribe", "Acme Triage Assist"],
+      "products": [
+        "Acme Scribe",
+        "Acme Triage Assist"
+      ],
       "pricing_model": "Per-seat SaaS plus implementation fee",
       "funding_stage": "Series B (£40m)",
       "strengths": [
@@ -115,7 +243,16 @@
         "New regulatory code adds validation overhead",
         "Per-seat pricing is exposed to trust budget cycles"
       ],
-      "sources": ["https://acme-health.example.com/about"]
+      "sources": [
+        "https://acme-health.example.com/about"
+      ],
+      "retrieved_sources": [
+        {
+          "url": "https://acme-health.example.com/about",
+          "retrieved_at": "2026-10-21T10:00:00+00:00",
+          "content_hash": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+        }
+      ]
     }
   }
 }

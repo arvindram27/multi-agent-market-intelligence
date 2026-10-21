@@ -11,8 +11,8 @@ from langgraph.checkpoint.sqlite import SqliteSaver
 from market_intelligence.agents.schemas import (
     CompetitorProfile,
     NewsSummary,
-    SentimentResult,
-    TrendReport,
+    NewsTone,
+    TopicReport,
 )
 from market_intelligence.graph import build_graph, checkpoint_serde
 
@@ -45,8 +45,8 @@ def load_fixture(path: Path = FIXTURE_PATH) -> dict:
     state = payload["state"]
     return {
         "summaries": [NewsSummary(**item) for item in state["summaries"]],
-        "trends": [TrendReport(**item) for item in state["trends"]],
-        "sentiments": [SentimentResult(**item) for item in state["sentiments"]],
+        "topics": [TopicReport(**item) for item in state["topics"]],
+        "tones": [NewsTone(**item) for item in state["tones"]],
         "competitor": CompetitorProfile(**state["competitor"]),
         "status": state.get("status", "awaiting_approval"),
         "approved": state.get("approved"),

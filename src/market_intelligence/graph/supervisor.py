@@ -18,9 +18,9 @@ from market_intelligence.agents.llm import get_llm
 from market_intelligence.budget import BudgetedLLM, RunTracker
 from market_intelligence.config import settings
 from market_intelligence.graph.nodes import (
-    analyze_sentiment_node,
+    analyze_news_tone_node,
     fetch_news_node,
-    identify_trends_node,
+    identify_topics_node,
     persist_node,
     research_competitor_node,
     review_profile_node,
@@ -90,13 +90,13 @@ def build_graph(
         retry_policy=RETRY_POLICY,
     )
     graph.add_node(
-        "identify_trends",
-        partial(identify_trends_node, llm=llm),
+        "identify_topics",
+        partial(identify_topics_node, llm=llm),
         retry_policy=RETRY_POLICY,
     )
     graph.add_node(
-        "analyze_sentiment",
-        partial(analyze_sentiment_node, llm=llm),
+        "analyze_news_tone",
+        partial(analyze_news_tone_node, llm=llm),
         retry_policy=RETRY_POLICY,
     )
     graph.add_node(
@@ -109,12 +109,12 @@ def build_graph(
 
     graph.add_edge(START, "start_run")
     graph.add_edge("start_run", "fetch_news")
-    # Fan out: trends and sentiment both consume the summaries and run in parallel.
-    graph.add_edge("fetch_news", "identify_trends")
-    graph.add_edge("fetch_news", "analyze_sentiment")
+    # Fan out: topics and news tone both consume the summaries and run in parallel.
+    graph.add_edge("fetch_news", "identify_topics")
+    graph.add_edge("fetch_news", "analyze_news_tone")
     # Fan in: the competitor step waits for both branches.
-    graph.add_edge("identify_trends", "research_competitor")
-    graph.add_edge("analyze_sentiment", "research_competitor")
+    graph.add_edge("identify_topics", "research_competitor")
+    graph.add_edge("analyze_news_tone", "research_competitor")
     graph.add_edge("research_competitor", "review_profile")
     # Approval gate: only an explicit approval may reach the business writer.
     graph.add_conditional_edges(

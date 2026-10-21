@@ -55,7 +55,7 @@ with st.sidebar:
 
 st.title("Market Intelligence")
 st.caption(
-    "News → trends + sentiment → competitor profile → human approval, "
+    "News excerpts → topics + news tone → competitor profile → human approval, "
     "orchestrated by a checkpointed LangGraph workflow."
 )
 
@@ -121,7 +121,7 @@ if state:
     elif status == "rejected" or state.get("approved") is False:
         st.error("Competitor profile rejected — nothing was persisted.")
 
-tabs = st.tabs(["News", "Trends", "Sentiment", "Competitors"])
+tabs = st.tabs(["News", "Topics", "News tone", "Competitors"])
 
 if state is None:
     st.info("Run an analysis to populate the tabs.")

@@ -4,6 +4,11 @@
 > **LangGraph**, **LangChain**, **Oracle AI Database (Autonomous 23ai)**, **LangSmith**,
 > **OpenTelemetry / Grafana Cloud**, and **RAGAS**.
 
+> **Status note (2026-10-22):** the shipped path already uses LangGraph, typed LLM
+> agents, bounded ingestion, source provenance, and a human approval gate. The original
+> deterministic MVP remains under `agents/` as a legacy baseline. Sections below describe
+> the target architecture; planned items are not claims that they are built.
+
 ---
 
 ## 1. Executive summary
@@ -566,7 +571,7 @@ without changes.
 | **1 — LLM-ify agents** | Replace 4 deterministic functions with typed OpenAI agents + tools (`init_chat_model`, `with_structured_output`) | Each agent returns validated Pydantic output; unit tests pass |
 | **2 — Orchestration** | Build LangGraph supervisor graph + checkpointing + HITL + retries/fallbacks | Runs resumable, streamable, auditable |
 | **2.5 — Streamlit demo (vertical slice)** | `app.py` + `ui/` components; stream node outputs; approve button (HITL); LangSmith tracing | Viewer streams all 4 agents into tabs and approves/rejects competitor profile |
-| **3 — Data** | Oracle 23ai schema, embeddings, HNSW/IVF, RAG retrieval via `OracleVS` | Articles/trends/sentiments/competitors persisted & searchable |
+| **3 - Data** | Oracle 23ai schema, embeddings, HNSW/IVF, RAG retrieval via `OracleVS` | Articles/topics/news tone/competitors persisted & searchable |
 | **4 — Observability** | LangSmith tracing + OTel → Grafana Cloud (Tempo/Loki/Prometheus) | End-to-end traces + dashboards live |
 | **5 — Evals** | RAGAS + LangSmith datasets, online evaluators, CI gating | Eval reports in CI; regressions blocked |
 | **6 — Serving & hardening** | FastAPI, background jobs, Docker/K8s/OCI, security, data governance | Production deployment, autoscaling, secured |

@@ -10,8 +10,8 @@ from pydantic import BaseModel, Field
 from market_intelligence.agents.schemas import (
     CompetitorProfile,
     NewsSummary,
-    SentimentResult,
-    TrendReport,
+    NewsTone,
+    TopicReport,
 )
 from market_intelligence.config import settings
 
@@ -28,8 +28,8 @@ class MarketIntelligenceState(BaseModel):
 
     # Agent outputs
     summaries: list[NewsSummary] = Field(default_factory=list)
-    trends: list[TrendReport] = Field(default_factory=list)
-    sentiments: list[SentimentResult] = Field(default_factory=list)
+    topics: list[TopicReport] = Field(default_factory=list)
+    tones: list[NewsTone] = Field(default_factory=list)
     competitor: CompetitorProfile | None = None
     warnings: list[str] = Field(default_factory=list)
 
