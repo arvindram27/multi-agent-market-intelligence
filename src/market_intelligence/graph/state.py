@@ -31,4 +31,13 @@ class MarketIntelligenceState(BaseModel):
 
     # Human-in-the-loop decision and run status
     approved: bool | None = None
-    status: Literal["running", "awaiting_approval", "complete", "rejected"] = "running"
+    status: Literal[
+        "running",
+        "awaiting_approval",
+        "approved_pending_write",
+        "complete",
+        "rejected",
+        "persist_failed",
+    ] = "running"
+    error: str | None = None
+    persisted_run_id: str | None = None

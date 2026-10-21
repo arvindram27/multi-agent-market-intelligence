@@ -2,6 +2,7 @@
 import sqlite3
 from types import SimpleNamespace
 
+import pytest
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.checkpoint.sqlite import SqliteSaver
 from langgraph.types import Command
@@ -14,6 +15,7 @@ from market_intelligence.agents.schemas import (
     TrendReport,
 )
 from market_intelligence.graph import build_graph, checkpoint_serde
+from market_intelligence.graph.nodes import InvalidDecisionError, parse_decision
 
 
 def _responses():
@@ -61,6 +63,20 @@ def _memory_saver():
     return InMemorySaver(serde=checkpoint_serde())
 
 
+class SpyWriter:
+    """Records persist calls and can simulate a storage failure."""
+
+    def __init__(self, error: Exception | None = None):
+        self.calls: list[tuple[str, object]] = []
+        self.error = error
+
+    def persist(self, run_id, state):
+        self.calls.append((run_id, state))
+        if self.error:
+            raise self.error
+        return run_id
+
+
 def test_graph_runs_to_approval_interrupt(fake_llm, monkeypatch):
     _mock_io(monkeypatch)
     graph = build_graph(checkpointer=_memory_saver(), llm=fake_llm(_responses()))
@@ -100,8 +116,125 @@ def test_graph_marks_rejected_on_rejection(fake_llm, monkeypatch):
 
     snap = graph.get_state(_config())
     values = _values(snap)
+    assert snap.next == ()
     assert values["approved"] is False
     assert values["status"] == "rejected"
+
+
+def test_rejection_never_reaches_the_writer(fake_llm, monkeypatch):
+    _mock_io(monkeypatch)
+    writer = SpyWriter()
+    graph = build_graph(
+        checkpointer=_memory_saver(), llm=fake_llm(_responses()), writer=writer
+    )
+    graph.invoke(_inputs(), _config())
+
+    graph.invoke(Command(resume={"approved": False}), _config())
+
+    assert writer.calls == []
+    assert graph.get_state(_config()).next == ()
+
+
+def test_approval_writes_once_and_reports_the_run_id(fake_llm, monkeypatch):
+    _mock_io(monkeypatch)
+    writer = SpyWriter()
+    graph = build_graph(
+        checkpointer=_memory_saver(), llm=fake_llm(_responses()), writer=writer
+    )
+    graph.invoke(_inputs(), _config())
+
+    graph.invoke(Command(resume={"approved": True}), _config())
+
+    assert len(writer.calls) == 1
+    run_id, persisted_state = writer.calls[0]
+    assert run_id == "run-1"
+    assert persisted_state.competitor.company == "Acme"
+    values = _values(graph.get_state(_config()))
+    assert values["status"] == "complete"
+    assert values["persisted_run_id"] == "run-1"
+
+
+def test_writer_failure_never_reports_complete(fake_llm, monkeypatch):
+    _mock_io(monkeypatch)
+    writer = SpyWriter(error=RuntimeError("database unavailable"))
+    graph = build_graph(
+        checkpointer=_memory_saver(), llm=fake_llm(_responses()), writer=writer
+    )
+    graph.invoke(_inputs(), _config())
+
+    graph.invoke(Command(resume={"approved": True}), _config())
+
+    snap = graph.get_state(_config())
+    values = _values(snap)
+    assert snap.next == ()
+    assert values["status"] == "persist_failed"
+    assert "database unavailable" in values["error"]
+    assert values.get("persisted_run_id") is None
+    assert len(writer.calls) == 1
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"approved": "false"},
+        {"approved": "true"},
+        {"approved": 1},
+        {"approved": None},
+        "yes",
+        1,
+    ],
+)
+def test_invalid_decisions_are_not_coerced_to_approval(
+    fake_llm, monkeypatch, payload
+):
+    _mock_io(monkeypatch)
+    writer = SpyWriter()
+    graph = build_graph(
+        checkpointer=_memory_saver(), llm=fake_llm(_responses()), writer=writer
+    )
+    graph.invoke(_inputs(), _config())
+
+    result = graph.invoke(Command(resume=payload), _config())
+
+    snap = graph.get_state(_config())
+    values = _values(snap)
+    assert snap.next == ("review_profile",)
+    assert values.get("approved") is None
+    assert "Approval decision must be a boolean" in values["error"]
+    assert "__interrupt__" in result
+    assert writer.calls == []
+
+    # The invalid payload must not poison the thread: a valid decision still works.
+    graph.invoke(Command(resume={"approved": True}), _config())
+    values = _values(graph.get_state(_config()))
+    assert values["status"] == "complete"
+    assert len(writer.calls) == 1
+
+
+def test_duplicate_resume_does_not_write_twice(fake_llm, monkeypatch):
+    _mock_io(monkeypatch)
+    writer = SpyWriter()
+    graph = build_graph(
+        checkpointer=_memory_saver(), llm=fake_llm(_responses()), writer=writer
+    )
+    graph.invoke(_inputs(), _config())
+
+    graph.invoke(Command(resume={"approved": True}), _config())
+    graph.invoke(Command(resume={"approved": True}), _config())
+
+    assert len(writer.calls) == 1
+
+
+@pytest.mark.parametrize("decision", [True, False])
+def test_parse_decision_accepts_explicit_booleans(decision):
+    assert parse_decision(decision) is decision
+    assert parse_decision({"approved": decision}) is decision
+
+
+@pytest.mark.parametrize("decision", ["false", 0, {}, {"approved": "false"}, []])
+def test_parse_decision_rejects_ambiguous_payloads(decision):
+    with pytest.raises(InvalidDecisionError):
+        parse_decision(decision)
 
 
 def test_graph_streams_node_updates_once_each(fake_llm, monkeypatch):

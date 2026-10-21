@@ -23,6 +23,8 @@ def _describe(node: str, data: dict) -> str:
     if node == "research_competitor":
         profile = data.get("competitor")
         return f"profile built for {profile.company}" if profile else "profile built"
+    if node == "persist":
+        return "saved" if data.get("persisted_run_id") else "failed"
     return "done"
 
 
@@ -36,6 +38,8 @@ def view_from_snapshot(snapshot) -> dict:
         "competitor": values.get("competitor"),
         "status": values.get("status", "running"),
         "approved": values.get("approved"),
+        "error": values.get("error"),
+        "persisted_run_id": values.get("persisted_run_id"),
         "pending": "review_profile" in (snapshot.next or ()),
     }
 
@@ -50,11 +54,19 @@ def run_and_stream(graph, config: dict, inputs: dict) -> dict:
                 st.write(f"**{NODE_LABELS.get(node, node)}** — {_describe(node, data)}")
         snapshot = graph.get_state(config)
         pending = "review_profile" in (snapshot.next or ())
+        view = view_from_snapshot(snapshot)
+        failed = view["status"] == "persist_failed"
         status.update(
-            label="Paused for approval" if pending else "Run complete",
-            state="complete",
+            label=(
+                "Paused for approval"
+                if pending
+                else "Persistence failed"
+                if failed
+                else "Run complete"
+            ),
+            state="error" if failed else "complete",
         )
-    return view_from_snapshot(snapshot)
+    return view
 
 
 def render_tabs(tabs, state: dict, on_decision) -> None:

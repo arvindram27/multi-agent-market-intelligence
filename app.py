@@ -93,15 +93,30 @@ def on_decision(approved: bool) -> None:
         return
 
     config = {"configurable": {"thread_id": st.session_state.thread_id}}
-    graph.invoke(Command(resume={"approved": approved}), config)
-    st.session_state.state = render.view_from_snapshot(graph.get_state(config))
+    try:
+        graph.invoke(Command(resume={"approved": approved}), config)
+        st.session_state.state = render.view_from_snapshot(graph.get_state(config))
+        st.session_state.decision_error = None
+    except Exception as exc:  # keep the pending run visible if resume fails
+        st.session_state.decision_error = str(exc)
 
+
+decision_error = st.session_state.pop("decision_error", None)
+if decision_error:
+    st.error(f"Approval failed: {decision_error}")
 
 if state:
-    st.caption(f"Status: **{state.get('status', 'running')}**")
-    if state.get("approved") is True:
+    status = state.get("status", "running")
+    st.caption(f"Status: **{status}**")
+    if status == "persist_failed":
+        detail = state.get("error") or ""
+        st.error(f"Persistence failed — nothing was saved. {detail}".strip())
+    elif state.get("error"):
+        st.error(f"Decision not accepted: {state['error']}")
+
+    if status == "complete" and state.get("approved") is True:
         st.success("Competitor profile approved — run complete.")
-    elif state.get("approved") is False:
+    elif status == "rejected" or state.get("approved") is False:
         st.error("Competitor profile rejected — nothing was persisted.")
 
 tabs = st.tabs(["News", "Trends", "Sentiment", "Competitors"])

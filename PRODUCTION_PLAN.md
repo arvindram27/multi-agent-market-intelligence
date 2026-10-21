@@ -212,8 +212,12 @@ def build_graph(checkpointer: BaseCheckpointSaver) -> StateGraph:
     g.add_edge("identify_trends", "research_competitors")
     g.add_edge("analyze_sentiment", "research_competitors")
     g.add_edge("research_competitors", "review_profile")
-    # HITL: interrupt after competitor research; resume on approval
-    g.add_edge("review_profile", "persist")
+    # HITL: only an explicit approval may reach the business writer.
+    g.add_conditional_edges(
+        "review_profile",
+        lambda s: "persist" if s.approved else "rejected",
+        {"persist": "persist", "rejected": END},
+    )
     g.add_edge("persist", END)
     return g.compile(checkpointer=checkpointer)
 ```
@@ -221,8 +225,9 @@ def build_graph(checkpointer: BaseCheckpointSaver) -> StateGraph:
 Key capabilities:
 - **Checkpointing** (`langgraph-checkpoint-postgres` for prod, `-sqlite` for local dev) for
   resume, audit, and time-travel debugging.
-- **Human-in-the-loop** via `interrupt_before=["review_profile"]` to approve competitor
-  profiles before persistence.
+- **Human-in-the-loop** via `interrupt()` inside `review_profile` to approve competitor
+  profiles **before business persistence/export**. The checkpoint already stores the pending
+  profile; the gate controls the writer, not all storage.
 - **Streaming** via `graph.astream_events(...)` to emit node/token events into OTel.
 - **Retries** via LangGraph node `RetryPolicy`, and `fallback` chains for LLM failures.
 

@@ -63,15 +63,17 @@ A comprehensive multi-agent system designed to automate market intelligence gath
 ### Production Features (🚧 In progress — see `PRODUCTION_PLAN.md`)
 - ✅ **LLM agents** via LangChain (`init_chat_model` → OpenAI) with typed Pydantic structured output
 - ✅ **LangGraph** orchestration with checkpointing, retries, and human-in-the-loop
-- 🚧 **Oracle Autonomous Database 23ai** persistence + AI Vector Search (RAG)
+- 🚧 **Oracle Autonomous Database 23ai** persistence + AI Vector Search (RAG) — the `persist`
+  node is currently an injected placeholder, so an approved run is not stored yet
 - 🚧 **Observability** via LangSmith + OpenTelemetry → Grafana Cloud
 - 🚧 **Evaluation** via RAGAS + LangSmith datasets (offline + online)
-- 🚧 **Streamlit demo UI** with live agent streaming
+- ✅ **Streamlit demo UI** with live agent streaming
 
 ## 🚀 Quick Start
 
 ### Prerequisites
-Python 3.10+ and the pinned dependencies in `pyproject.toml`.
+Python 3.11+ (Streamlit 1.66, used by the demo, requires 3.11 or newer) and the pinned
+dependencies in `pyproject.toml`.
 
 ```bash
 python -m venv .venv
@@ -125,8 +127,15 @@ graph.invoke(
 graph.invoke(Command(resume={"approved": True}), config)
 ```
 
-The run pauses before the competitor profile is persisted; resume with approval or rejection.
-`SqliteSaver` (from `langgraph.checkpoint.sqlite`) keeps checkpoints across processes.
+The run pauses at `review_profile` before the approved profile would be persisted. Resume
+with an explicit boolean decision (`{"approved": True}` or `{"approved": False}`); rejection
+ends the run without calling the writer. Invalid payloads are rejected and re-prompt instead
+of being coerced. `SqliteSaver` (from `langgraph.checkpoint.sqlite`) keeps checkpoints across
+processes.
+
+> Approval gates **business persistence/export**, not checkpoint storage: the checkpoint
+> already holds the pending profile. The Node local demo injects `NullProfileWriter`; the
+> durable SQLite store replaces it in the data-layer phase.
 
 ### Example Output
 The orchestrator will:
