@@ -14,6 +14,8 @@ dependencies = [
     "beautifulsoup4==4.15.0",
     "langchain==1.4.5",
     "langchain-openai==1.7.1",
+    "langgraph==1.2.15",
+    "langgraph-checkpoint-sqlite==3.1.2",
     "pydantic-settings==2.15.0",
 ]
 
