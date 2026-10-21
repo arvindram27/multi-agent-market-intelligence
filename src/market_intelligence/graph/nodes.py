@@ -6,7 +6,7 @@ from langchain_core.runnables import RunnableConfig
 from langgraph.types import interrupt
 
 from market_intelligence.agents.competitor import fetch_and_analyze
-from market_intelligence.agents.news import fetch_and_summarize
+from market_intelligence.agents.news import ingest_news
 from market_intelligence.agents.sentiment import analyze_sentiment
 from market_intelligence.agents.trend import identify_trends
 from market_intelligence.graph.state import MarketIntelligenceState
@@ -36,13 +36,27 @@ def parse_decision(decision: Any) -> bool:
     )
 
 
-def fetch_news_node(state: MarketIntelligenceState, llm=None) -> dict[str, Any]:
-    """Fetch the RSS feed and summarize each article."""
-    return {
-        "summaries": fetch_and_summarize(
-            state.rss_url, num_articles=state.num_articles, llm=llm
-        )
-    }
+def start_run_node(state: MarketIntelligenceState, tracker=None) -> dict[str, Any]:
+    """Reset per-run LLM counters before the first work node.
+
+    This node has no retry policy and runs once per new thread. Resuming an
+    approval does not pass through it, so the resumed run keeps the budget it
+    already consumed. Keeping the reset out of ``fetch_news`` is deliberate:
+    retries of that node must not get a fresh ceiling.
+    """
+    if tracker is not None:
+        tracker.reset()
+    return {}
+
+
+def fetch_news_node(
+    state: MarketIntelligenceState, llm=None
+) -> dict[str, Any]:
+    """Fetch the RSS feed and summarize each usable article."""
+    report = ingest_news(
+        state.rss_url, num_articles=state.num_articles, llm=llm
+    )
+    return {"summaries": report.summaries, "warnings": report.warnings}
 
 
 def identify_trends_node(state: MarketIntelligenceState, llm=None) -> dict[str, Any]:

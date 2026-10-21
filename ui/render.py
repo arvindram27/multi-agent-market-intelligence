@@ -4,6 +4,7 @@ import streamlit as st
 from ui.components import competitors, news, sentiment, trends
 
 NODE_LABELS = {
+    "start_run": "Run start",
     "fetch_news": "News agent",
     "identify_trends": "Trend agent",
     "analyze_sentiment": "Sentiment agent",
@@ -40,6 +41,7 @@ def view_from_snapshot(snapshot) -> dict:
         "approved": values.get("approved"),
         "error": values.get("error"),
         "persisted_run_id": values.get("persisted_run_id"),
+        "warnings": values.get("warnings", []),
         "pending": "review_profile" in (snapshot.next or ()),
     }
 
@@ -49,7 +51,7 @@ def run_and_stream(graph, config: dict, inputs: dict) -> dict:
     with st.status("Running agents…", expanded=True) as status:
         for update in graph.stream(inputs, config, stream_mode="updates"):
             for node, data in update.items():
-                if node == "__interrupt__":
+                if node in ("__interrupt__", "start_run"):
                     continue
                 st.write(f"**{NODE_LABELS.get(node, node)}** — {_describe(node, data)}")
         snapshot = graph.get_state(config)

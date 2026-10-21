@@ -13,6 +13,7 @@ from market_intelligence.agents.schemas import (
     SentimentResult,
     TrendReport,
 )
+from market_intelligence.config import settings
 
 
 class MarketIntelligenceState(BaseModel):
@@ -21,13 +22,16 @@ class MarketIntelligenceState(BaseModel):
     # Inputs
     rss_url: str
     competitor_url: str
-    num_articles: int = 2
+    num_articles: int = Field(
+        default=settings.num_articles, ge=1, le=settings.max_articles
+    )
 
     # Agent outputs
     summaries: list[NewsSummary] = Field(default_factory=list)
     trends: list[TrendReport] = Field(default_factory=list)
     sentiments: list[SentimentResult] = Field(default_factory=list)
     competitor: CompetitorProfile | None = None
+    warnings: list[str] = Field(default_factory=list)
 
     # Human-in-the-loop decision and run status
     approved: bool | None = None
