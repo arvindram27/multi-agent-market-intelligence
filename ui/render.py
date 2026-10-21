@@ -68,6 +68,5 @@ def render_tabs(tabs, state: dict, on_decision) -> None:
         competitors.render(
             state.get("competitor"),
             pending=state.get("pending", False),
-            approved=state.get("approved"),
             on_decision=on_decision,
         )

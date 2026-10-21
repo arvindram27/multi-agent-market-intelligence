@@ -2,7 +2,7 @@
 import streamlit as st
 
 
-def render(competitor, pending: bool, approved, on_decision) -> None:
+def render(competitor, pending: bool, on_decision) -> None:
     st.subheader("Competitor profile")
     if competitor is None:
         st.info("No competitor profile yet — run an analysis from the sidebar.")
@@ -35,14 +35,19 @@ def render(competitor, pending: bool, approved, on_decision) -> None:
     if pending:
         st.warning("Human approval required before this profile is persisted.")
         approve, reject = st.columns(2)
-        if approve.button("Approve profile", type="primary", width="stretch"):
-            on_decision(True)
-        if reject.button("Reject", width="stretch"):
-            on_decision(False)
-    elif approved is True:
-        st.success("Profile approved — run complete.")
-    elif approved is False:
-        st.error("Profile rejected — nothing was persisted.")
+        approve.button(
+            "Approve profile",
+            type="primary",
+            width="stretch",
+            on_click=on_decision,
+            args=(True,),
+        )
+        reject.button(
+            "Reject",
+            width="stretch",
+            on_click=on_decision,
+            args=(False,),
+        )
 
     if competitor.sources:
         st.markdown("**Sources**")

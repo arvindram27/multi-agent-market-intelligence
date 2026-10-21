@@ -25,4 +25,4 @@ def test_demo_app_renders_and_approves(monkeypatch):
     ).click().run()
 
     assert not app.exception
-    assert any("Profile approved" in item.value for item in app.success)
+    assert any("profile approved" in item.value.lower() for item in app.success)
