@@ -1,0 +1,41 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+      - name: Install package with dev and demo extras
+        run: python -m pip install --upgrade pip && pip install -e ".[dev,demo]"
+      - name: Run offline test suite (no network)
+        run: pytest --disable-socket -q
+      - name: Regenerate offline evaluation summary
+        run: python evals/run_evals.py
+      - name: Fail if the committed evaluation summary is stale
+        run: git diff --exit-code evals/summary.md evals/summary.json
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+      - name: Install dev tooling
+        run: python -m pip install --upgrade pip && pip install -e ".[dev]"
+      - name: Run pre-commit hooks (including secret scan)
+        run: pre-commit run --all-files

@@ -37,3 +37,6 @@ packages = ["src/market_intelligence"]
 [tool.pytest.ini_options]
 pythonpath = ["src", "."]
 testpaths = ["tests"]
+markers = [
+    "enable_socket: test needs a local socket (asyncio socketpair), but performs no network I/O",
+]

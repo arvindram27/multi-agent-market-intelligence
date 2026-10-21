@@ -1,0 +1,382 @@
+{
+  "harness_version": "0.1",
+  "dataset_sha256": "5RWCKA5VJB5NKFOI",
+  "cases": 49,
+  "model": "legacy-deterministic-baseline (offline)",
+  "prompt_version": "agent-inline-prompts@1",
+  "llm_tokens": null,
+  "cost_usd": null,
+  "categories": [
+    {
+      "category": "tone",
+      "cases": 19,
+      "correct": 15,
+      "accuracy": 0.789
+    },
+    {
+      "category": "evidence_support",
+      "cases": 10,
+      "correct": 10,
+      "accuracy": 1.0
+    },
+    {
+      "category": "unsupported_company_claims",
+      "cases": 10,
+      "correct": 10,
+      "accuracy": 1.0
+    },
+    {
+      "category": "factuality",
+      "cases": 10,
+      "correct": 10,
+      "accuracy": 1.0
+    }
+  ],
+  "correct": 45,
+  "accuracy": 0.918,
+  "per_case": [
+    {
+      "id": "tone-001",
+      "category": "tone",
+      "label": "positive",
+      "predicted": "positive",
+      "correct": true
+    },
+    {
+      "id": "tone-002",
+      "category": "tone",
+      "label": "positive",
+      "predicted": "positive",
+      "correct": true
+    },
+    {
+      "id": "tone-003",
+      "category": "tone",
+      "label": "positive",
+      "predicted": "positive",
+      "correct": true
+    },
+    {
+      "id": "tone-004",
+      "category": "tone",
+      "label": "positive",
+      "predicted": "positive",
+      "correct": true
+    },
+    {
+      "id": "tone-005",
+      "category": "tone",
+      "label": "positive",
+      "predicted": "positive",
+      "correct": true
+    },
+    {
+      "id": "tone-006",
+      "category": "tone",
+      "label": "negative",
+      "predicted": "negative",
+      "correct": true
+    },
+    {
+      "id": "tone-007",
+      "category": "tone",
+      "label": "negative",
+      "predicted": "negative",
+      "correct": true
+    },
+    {
+      "id": "tone-008",
+      "category": "tone",
+      "label": "negative",
+      "predicted": "negative",
+      "correct": true
+    },
+    {
+      "id": "tone-009",
+      "category": "tone",
+      "label": "negative",
+      "predicted": "negative",
+      "correct": true
+    },
+    {
+      "id": "tone-010",
+      "category": "tone",
+      "label": "negative",
+      "predicted": "negative",
+      "correct": true
+    },
+    {
+      "id": "tone-011",
+      "category": "tone",
+      "label": "neutral",
+      "predicted": "neutral",
+      "correct": true
+    },
+    {
+      "id": "tone-012",
+      "category": "tone",
+      "label": "neutral",
+      "predicted": "neutral",
+      "correct": true
+    },
+    {
+      "id": "tone-013",
+      "category": "tone",
+      "label": "neutral",
+      "predicted": "neutral",
+      "correct": true
+    },
+    {
+      "id": "tone-014",
+      "category": "tone",
+      "label": "neutral",
+      "predicted": "neutral",
+      "correct": true
+    },
+    {
+      "id": "tone-015",
+      "category": "tone",
+      "label": "neutral",
+      "predicted": "neutral",
+      "correct": true
+    },
+    {
+      "id": "ev-001",
+      "category": "evidence_support",
+      "label": "in_source",
+      "predicted": "in_source",
+      "correct": true
+    },
+    {
+      "id": "ev-002",
+      "category": "evidence_support",
+      "label": "in_source",
+      "predicted": "in_source",
+      "correct": true
+    },
+    {
+      "id": "ev-003",
+      "category": "evidence_support",
+      "label": "in_source",
+      "predicted": "in_source",
+      "correct": true
+    },
+    {
+      "id": "ev-004",
+      "category": "evidence_support",
+      "label": "in_source",
+      "predicted": "in_source",
+      "correct": true
+    },
+    {
+      "id": "ev-005",
+      "category": "evidence_support",
+      "label": "in_source",
+      "predicted": "in_source",
+      "correct": true
+    },
+    {
+      "id": "ev-006",
+      "category": "evidence_support",
+      "label": "not_in_source",
+      "predicted": "not_in_source",
+      "correct": true
+    },
+    {
+      "id": "ev-007",
+      "category": "evidence_support",
+      "label": "not_in_source",
+      "predicted": "not_in_source",
+      "correct": true
+    },
+    {
+      "id": "ev-008",
+      "category": "evidence_support",
+      "label": "not_in_source",
+      "predicted": "not_in_source",
+      "correct": true
+    },
+    {
+      "id": "ev-009",
+      "category": "evidence_support",
+      "label": "not_in_source",
+      "predicted": "not_in_source",
+      "correct": true
+    },
+    {
+      "id": "ev-010",
+      "category": "evidence_support",
+      "label": "not_in_source",
+      "predicted": "not_in_source",
+      "correct": true
+    },
+    {
+      "id": "claim-001",
+      "category": "unsupported_company_claims",
+      "label": "supported",
+      "predicted": "supported",
+      "correct": true
+    },
+    {
+      "id": "claim-002",
+      "category": "unsupported_company_claims",
+      "label": "supported",
+      "predicted": "supported",
+      "correct": true
+    },
+    {
+      "id": "claim-003",
+      "category": "unsupported_company_claims",
+      "label": "supported",
+      "predicted": "supported",
+      "correct": true
+    },
+    {
+      "id": "claim-004",
+      "category": "unsupported_company_claims",
+      "label": "supported",
+      "predicted": "supported",
+      "correct": true
+    },
+    {
+      "id": "claim-005",
+      "category": "unsupported_company_claims",
+      "label": "supported",
+      "predicted": "supported",
+      "correct": true
+    },
+    {
+      "id": "claim-006",
+      "category": "unsupported_company_claims",
+      "label": "unsupported",
+      "predicted": "unsupported",
+      "correct": true
+    },
+    {
+      "id": "claim-007",
+      "category": "unsupported_company_claims",
+      "label": "unsupported",
+      "predicted": "unsupported",
+      "correct": true
+    },
+    {
+      "id": "claim-008",
+      "category": "unsupported_company_claims",
+      "label": "unsupported",
+      "predicted": "unsupported",
+      "correct": true
+    },
+    {
+      "id": "claim-009",
+      "category": "unsupported_company_claims",
+      "label": "unsupported",
+      "predicted": "unsupported",
+      "correct": true
+    },
+    {
+      "id": "claim-010",
+      "category": "unsupported_company_claims",
+      "label": "unsupported",
+      "predicted": "unsupported",
+      "correct": true
+    },
+    {
+      "id": "fact-001",
+      "category": "factuality",
+      "label": "grounded",
+      "predicted": "grounded",
+      "correct": true
+    },
+    {
+      "id": "fact-002",
+      "category": "factuality",
+      "label": "ungrounded",
+      "predicted": "ungrounded",
+      "correct": true
+    },
+    {
+      "id": "fact-003",
+      "category": "factuality",
+      "label": "grounded",
+      "predicted": "grounded",
+      "correct": true
+    },
+    {
+      "id": "fact-004",
+      "category": "factuality",
+      "label": "ungrounded",
+      "predicted": "ungrounded",
+      "correct": true
+    },
+    {
+      "id": "fact-005",
+      "category": "factuality",
+      "label": "grounded",
+      "predicted": "grounded",
+      "correct": true
+    },
+    {
+      "id": "fact-006",
+      "category": "factuality",
+      "label": "ungrounded",
+      "predicted": "ungrounded",
+      "correct": true
+    },
+    {
+      "id": "fact-007",
+      "category": "factuality",
+      "label": "grounded",
+      "predicted": "grounded",
+      "correct": true
+    },
+    {
+      "id": "fact-008",
+      "category": "factuality",
+      "label": "ungrounded",
+      "predicted": "ungrounded",
+      "correct": true
+    },
+    {
+      "id": "fact-009",
+      "category": "factuality",
+      "label": "grounded",
+      "predicted": "grounded",
+      "correct": true
+    },
+    {
+      "id": "fact-010",
+      "category": "factuality",
+      "label": "ungrounded",
+      "predicted": "ungrounded",
+      "correct": true
+    },
+    {
+      "id": "tone-016",
+      "category": "tone",
+      "label": "mixed",
+      "predicted": "neutral",
+      "correct": false
+    },
+    {
+      "id": "tone-017",
+      "category": "tone",
+      "label": "mixed",
+      "predicted": "neutral",
+      "correct": false
+    },
+    {
+      "id": "tone-018",
+      "category": "tone",
+      "label": "mixed",
+      "predicted": "neutral",
+      "correct": false
+    },
+    {
+      "id": "tone-019",
+      "category": "tone",
+      "label": "mixed",
+      "predicted": "positive",
+      "correct": false
+    }
+  ]
+}
