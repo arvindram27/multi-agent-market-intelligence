@@ -123,9 +123,20 @@ The LLM agents (`src/market_intelligence/`) read settings from environment varia
 
 ### 💰 Cost per run
 
-**Placeholder** — not yet measured. A live run requires an `OPENAI_API_KEY`, which is not
-available in this environment, so the token count and cost per orchestrator run have not
-been benchmarked. Update this figure after a real run against `gpt-4o-mini`.
+**Measured** on 2026-10-21 with `gpt-4o-mini`, 2 BBC Business RSS articles, and
+`https://www.google.com/about/` as the competitor page:
+
+| Metric | Value |
+|---|---|
+| LLM calls | 6 |
+| Prompt tokens | 1,622 |
+| Completion tokens | 767 |
+| **Total tokens** | **2,389** |
+| **Estimated cost** | **~$0.0007 per run** |
+
+Rates used: $0.15 per 1M input tokens and $0.60 per 1M output tokens (`gpt-4o-mini`
+list prices at measurement time). Output was capped at 512 tokens per call; wall clock
+was 16.6s.
 
 ## 🖥️ Streamlit Demo (planned)
 
