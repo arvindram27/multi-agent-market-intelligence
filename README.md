@@ -1,5 +1,7 @@
 # Multi-Agent AI Ecosystem for Market Intelligence
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
+
 A comprehensive multi-agent system designed to automate market intelligence gathering, processing, and analysis. This project implements specialized AI agents that work together to provide insights from RSS news excerpts, competitor pages, extracted topics, and model-assessed news tone.
 
 > 📄 **Production roadmap:** see [`PRODUCTION_PLAN.md`](./PRODUCTION_PLAN.md) for the full migration plan (LangGraph · LangChain · Oracle 23ai · LangSmith · Grafana · RAGAS).
@@ -364,6 +366,10 @@ This project is designed as a comprehensive market intelligence solution. Future
 ## 📞 Support
 
 For questions about implementation or extending this system, refer to the comprehensive documentation provided in the project.
+
+## License
+
+Released under the [MIT License](./LICENSE). Copyright (c) 2026 arvindram27.
 
 ---
 
