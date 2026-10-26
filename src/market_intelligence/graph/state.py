@@ -42,6 +42,7 @@ class MarketIntelligenceState(BaseModel):
         "complete",
         "rejected",
         "persist_failed",
+        "persist_unknown",
     ] = "running"
     error: str | None = None
     persisted_run_id: str | None = None

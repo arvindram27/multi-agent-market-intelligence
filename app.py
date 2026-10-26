@@ -16,6 +16,8 @@ from langgraph.types import Command
 from ui import render
 from ui.session import DEMO_MODE, init_session, load_fixture
 
+from market_intelligence.persistence import persistence_configured
+
 DEFAULT_RSS = "https://feeds.bbci.co.uk/news/business/rss.xml"
 DEFAULT_COMPETITOR = "https://www.google.com/about/"
 
@@ -35,6 +37,12 @@ with st.sidebar:
     if DEMO_MODE:
         st.info("Fixture mode — deterministic snapshot, no API calls.")
     else:
+        if not persistence_configured():
+            st.warning(
+                "Persistence is not configured (DATABASE_URL is unset). "
+                "Approved runs cannot be saved.",
+                icon="⚠️",
+            )
         rss_url = st.text_input("RSS feed", DEFAULT_RSS)
         competitor_url = st.text_input("Competitor page", DEFAULT_COMPETITOR)
         num_articles = st.slider("Articles to analyze", 1, 5, 3)
@@ -112,7 +120,15 @@ if state:
         st.warning(warning)
     if status == "persist_failed":
         detail = state.get("error") or ""
-        st.error(f"Persistence failed — nothing was saved. {detail}".strip())
+        st.error(f"Persistence failed — no rows were committed. {detail}".strip())
+    elif status == "persist_unknown":
+        detail = state.get("error") or ""
+        st.warning(
+            "Persistence outcome unknown — the snapshot may or may not have "
+            "been committed. Retrying is safe: identical snapshots are "
+            f"deduplicated by their run id and content hash. {detail}".strip(),
+            icon="⚠️",
+        )
     elif state.get("error"):
         st.error(f"Decision not accepted: {state['error']}")
 

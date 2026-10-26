@@ -1,0 +1,29 @@
+# Local-only development database for durable approved-run persistence.
+#
+# This is a convenience service for a developer machine, not a deployment
+# manifest. It binds to 127.0.0.1 so the database is not reachable from the
+# network, and it uses a named volume so data survives `docker compose down`.
+#
+# Setup is explicit; see README "Durable Postgres persistence".
+services:
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-market_intelligence}
+      POSTGRES_USER: ${POSTGRES_USER:-market_intel}
+      # Required: there is deliberately no hardcoded fallback password.
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - market_intelligence_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 5s
+
+volumes:
+  market_intelligence_pgdata:
+    name: market_intelligence_pgdata

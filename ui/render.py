@@ -25,7 +25,9 @@ def _describe(node: str, data: dict) -> str:
         profile = data.get("competitor")
         return f"profile built for {profile.company}" if profile else "profile built"
     if node == "persist":
-        return "saved" if data.get("persisted_run_id") else "failed"
+        if data.get("persisted_run_id"):
+            return "saved"
+        return "outcome unknown" if data.get("status") == "persist_unknown" else "failed"
     return "done"
 
 
@@ -58,15 +60,18 @@ def run_and_stream(graph, config: dict, inputs: dict) -> dict:
         pending = "review_profile" in (snapshot.next or ())
         view = view_from_snapshot(snapshot)
         failed = view["status"] == "persist_failed"
+        unknown = view["status"] == "persist_unknown"
         status.update(
             label=(
                 "Paused for approval"
                 if pending
+                else "Persistence outcome unknown"
+                if unknown
                 else "Persistence failed"
                 if failed
                 else "Run complete"
             ),
-            state="error" if failed else "complete",
+            state="error" if (failed or unknown) else "complete",
         )
     return view
 

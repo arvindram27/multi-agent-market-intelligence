@@ -17,6 +17,7 @@ from market_intelligence.budget import TokenBudgetExceeded
 from market_intelligence.graph import build_graph, checkpoint_serde
 from market_intelligence.graph.nodes import InvalidDecisionError, parse_decision
 from market_intelligence.net import FetchResult
+from market_intelligence.persistence import NullProfileWriter
 
 FEED_XML = b"""<?xml version="1.0" encoding="UTF-8"?>
 <rss version="2.0"><channel><title>Test feed</title>
@@ -122,7 +123,12 @@ def test_run_call_ceiling_stops_the_graph(fake_llm, monkeypatch):
 
 def test_graph_completes_on_approval(fake_llm, monkeypatch):
     _mock_io(monkeypatch)
-    graph = build_graph(checkpointer=_memory_saver(), llm=fake_llm(_responses()))
+    # Explicit no-op writer: tests must never depend on ambient DATABASE_URL.
+    graph = build_graph(
+        checkpointer=_memory_saver(),
+        llm=fake_llm(_responses()),
+        writer=NullProfileWriter(),
+    )
     graph.invoke(_inputs(), _config())
 
     graph.invoke(Command(resume={"approved": True}), _config())
@@ -285,6 +291,7 @@ def test_sqlite_checkpoint_resumes_in_a_new_graph(fake_llm, monkeypatch, tmp_pat
         first = build_graph(
             checkpointer=SqliteSaver(conn, serde=checkpoint_serde()),
             llm=fake_llm(_responses()),
+            writer=NullProfileWriter(),
         )
         first.invoke(_inputs(), _config("persisted"))
         assert first.get_state(_config("persisted")).next == ("review_profile",)
@@ -297,6 +304,7 @@ def test_sqlite_checkpoint_resumes_in_a_new_graph(fake_llm, monkeypatch, tmp_pat
         second = build_graph(
             checkpointer=SqliteSaver(conn, serde=checkpoint_serde()),
             llm=fake_llm(_responses()),
+            writer=NullProfileWriter(),
         )
         second.invoke(Command(resume={"approved": True}), _config("persisted"))
         snap = second.get_state(_config("persisted"))

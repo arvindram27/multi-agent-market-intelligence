@@ -27,7 +27,7 @@ from market_intelligence.graph.nodes import (
     start_run_node,
 )
 from market_intelligence.graph.state import MarketIntelligenceState
-from market_intelligence.persistence import NullProfileWriter, ProfileWriter
+from market_intelligence.persistence import ProfileWriter, default_profile_writer
 from market_intelligence.retry import is_transient_error
 
 # Network/LLM nodes retry with exponential backoff, but only for transient
@@ -62,9 +62,11 @@ def build_graph(
             Postgres/Oracle saver in production.
         llm: Optional injected chat model (tests pass a fake). When omitted the agents
             build one from settings via ``get_llm()``.
-        writer: Business-persistence implementation for approved runs. Defaults to
-            ``NullProfileWriter`` until the durable store lands; tests inject a spy
-            to prove rejection never reaches it.
+        writer: Business-persistence implementation for approved runs. When
+            omitted, the writer is selected from configuration: a Postgres
+            writer if ``DATABASE_URL`` is set, otherwise one that fails loudly
+            at persist time. ``NullProfileWriter`` is never selected implicitly;
+            tests and the fixture demo pass it explicitly.
         max_run_tokens: Optional override for the per-run token ceiling.
         max_run_llm_calls: Optional override for the per-run LLM call ceiling.
 
@@ -105,7 +107,10 @@ def build_graph(
         retry_policy=RETRY_POLICY,
     )
     graph.add_node("review_profile", review_profile_node)
-    graph.add_node("persist", partial(persist_node, writer=writer or NullProfileWriter()))
+    graph.add_node(
+        "persist",
+        partial(persist_node, writer=writer or default_profile_writer()),
+    )
 
     graph.add_edge(START, "start_run")
     graph.add_edge("start_run", "fetch_news")

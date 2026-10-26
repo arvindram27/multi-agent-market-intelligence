@@ -1,5 +1,5 @@
 """Application settings, loaded from environment variables and a local .env file."""
-from pydantic import Field, model_validator
+from pydantic import Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -39,6 +39,14 @@ class Settings(BaseSettings):
     llm_max_output_tokens: int = Field(default=512, ge=1)
     max_run_tokens: int = Field(default=20_000, ge=1)
     max_run_llm_calls: int = Field(default=24, ge=1)
+
+    # Durable business persistence for approved runs. Empty means "not
+    # configured", which makes the writer fail loudly instead of no-oping.
+    # SecretStr keeps the DSN out of repr(), logs and accidental dumps.
+    database_url: SecretStr = SecretStr("")
+    db_connect_timeout: float = Field(default=5.0, gt=0)
+    # Local integration tests only. The application never reads this value.
+    test_database_url: SecretStr = SecretStr("")
 
     @model_validator(mode="after")
     def _default_article_count_is_in_bounds(self):

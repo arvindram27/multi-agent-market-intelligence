@@ -15,6 +15,7 @@ from market_intelligence.agents.schemas import (
     TopicReport,
 )
 from market_intelligence.graph import build_graph, checkpoint_serde
+from market_intelligence.persistence import default_profile_writer
 
 DEMO_MODE = os.getenv("DEMO_MODE", "0") == "1"
 FIXTURE_PATH = Path(__file__).resolve().parent.parent / "data" / "demo_run.json"
@@ -29,7 +30,8 @@ def init_session():
         conn = sqlite3.connect("checkpoints.db", check_same_thread=False)
         st.session_state.checkpoint_conn = conn
         st.session_state.graph = build_graph(
-            checkpointer=SqliteSaver(conn, serde=checkpoint_serde())
+            checkpointer=SqliteSaver(conn, serde=checkpoint_serde()),
+            writer=default_profile_writer(),
         )
 
     if "thread_id" not in st.session_state:

@@ -63,8 +63,10 @@ A comprehensive multi-agent system designed to automate market intelligence gath
 ### Production Features (🚧 In progress — see `PRODUCTION_PLAN.md`)
 - ✅ **LLM agents** via LangChain (`init_chat_model` → OpenAI) with typed Pydantic structured output
 - ✅ **LangGraph** orchestration with checkpointing, retries, and human-in-the-loop
-- 🚧 **Oracle Autonomous Database 23ai** persistence + AI Vector Search (RAG) — the `persist`
-  node is currently an injected placeholder, so an approved run is not stored yet
+- ✅ **Postgres persistence for approved runs** (local Docker): one transaction per
+  snapshot with provenance, keyed by run id and content hash so retries are idempotent
+- 🚧 **Oracle Autonomous Database 23ai** adapter + AI Vector Search (RAG) for the production
+  data layer
 - 🚧 **Observability** via LangSmith + OpenTelemetry → Grafana Cloud
 - 🚧 **Evaluation** via RAGAS + LangSmith datasets (offline + online)
 - ✅ **Streamlit demo UI** with live agent streaming
@@ -134,8 +136,63 @@ of being coerced. `SqliteSaver` (from `langgraph.checkpoint.sqlite`) keeps check
 processes.
 
 > Approval gates **business persistence/export**, not checkpoint storage: the checkpoint
-> already holds the pending profile. The Node local demo injects `NullProfileWriter`; the
-> durable SQLite store replaces it in the data-layer phase.
+> already holds the pending profile. The writer is selected from configuration — Postgres
+> when `DATABASE_URL` is set, otherwise one that fails loudly at persist time. There is no
+> implicit no-op writer; `NullProfileWriter` is only for tests and the fixture demo.
+
+### Durable Postgres persistence (local)
+
+Approved runs are written to a local Postgres database started with Docker Compose. This is
+a developer-machine setup; it creates no cloud resources and binds the port to `127.0.0.1`.
+
+```bash
+# 1. Put local-only credentials in the ignored .env (placeholders in .env.example)
+# 2. Start the database
+docker compose up -d db
+# 3. Initial setup: creates missing objects, then verifies the shape (safe to re-run)
+python scripts/init_db.py
+python scripts/init_db.py        # second run is a no-op
+```
+
+`schema.sql` is **initial setup, not a migration tool**. It creates missing tables and fails
+with a clear message when an existing table has an incompatible shape; it never drops or
+rewrites data. Introduce a real migration tool before changing a schema that holds data you
+care about.
+
+**What is stored.** One row in `runs` per snapshot, plus `run_articles`, `run_topics`,
+`run_topic_evidence`, `run_tones` and `competitor_profiles`. The full business payload is
+kept in `runs.payload` (JSONB) for round-trip checks. Retrieval and publication times are
+stored as `timestamptz` where parseable, with the raw strings preserved beside them.
+Unverified topic citations are kept (`verified = false`) rather than dropped; only verified
+citations carry an article foreign key. Tone scores and model confidence use
+`double precision`, so exact values are not silently rounded.
+
+**Identity and dedup.** `content_hash = sha256("mi-run-v1\n" + canonical JSON)`, where the
+canonical JSON is sorted, whitespace-free and contains only business content (inputs,
+summaries, topics, tones, competitor, warnings) — never status/error bookkeeping.
+`UNIQUE (run_id, content_hash)` makes an identical retry a no-op and leaves changed content
+as a second, visible version. `latest_runs` picks the highest `runs.id` per run; ids and
+`stored_at` reflect insertion/statement order, not commit or approval order.
+
+**Transactions and failure.** Each snapshot is one top-level transaction. A connection lost
+around commit is reconciled with a fresh connection: if the snapshot is present the write
+is reported saved; if it is verifiably absent the run is `persist_failed`; if neither can
+be checked the run is `persist_unknown` and the UI says so instead of claiming nothing was
+saved. Re-approving after `persist_unknown` is safe and deduplicated. Concurrent writers can
+still contend, and deadlocks remain possible in general; a deadlock surfaces as a database
+error, rolls the snapshot back, and is safe to retry because the write is idempotent.
+
+**Limitations.** This is initial setup for one local developer machine: no migration tool,
+no retention/expiry policy, no row-level access control, and `latest_runs` is insertion
+order (advisory under concurrent changed-content writes). Use a migration tool and a managed
+secret store before treating this as a production data layer.
+
+Run the real-database tests separately from the offline suite:
+
+```bash
+.venv\Scripts\python.exe -m pytest -q -m "not integration" --disable-socket   # offline
+.venv\Scripts\python.exe -m pytest -q -m integration                          # real Postgres
+```
 
 ### Example Output
 The orchestrator will:
@@ -190,6 +247,9 @@ configurable:
 | `LLM_MAX_OUTPUT_TOKENS` | `512` | Output-token cap per LLM call |
 | `MAX_RUN_TOKENS` | `20000` | Per-run token ceiling (fails closed when usage is reported) |
 | `MAX_RUN_LLM_CALLS` | `24` | Per-run LLM call ceiling |
+| `DATABASE_URL` | _(empty)_ | Postgres DSN for approved-run persistence; empty fails loudly at persist time |
+| `DB_CONNECT_TIMEOUT` | `5.0` | Database connect timeout (seconds) |
+| `TEST_DATABASE_URL` | _(empty)_ | Test-only DSN; the database name must end in `_test` |
 
 ### 🛡️ Ingestion safety
 
@@ -218,6 +278,10 @@ All RSS and competitor fetches go through one bounded client (`src/market_intell
   the repository tracks placeholders only.
 - **Local development:** `cp .env.example .env`, then add the key. `.env` never leaves your
   machine.
+- **Database credentials:** `DATABASE_URL` (and the test-only `TEST_DATABASE_URL`) live only
+  in `.env`. The DSN is held as a `SecretStr`, never written to graph state or the UI, and
+  error messages/logs are scrubbed of both the DSN and its password. The Compose service has
+  no fallback password and refuses to start until `POSTGRES_PASSWORD` is set.
 - **Rotate immediately** if a key is ever pasted into chat, a log, or a ticket. Revoke it in
   the provider console and issue a new one — deleting the file does not undo the exposure.
 - **Pre-commit guard:** after `pip install -e ".[dev]"`, run `pre-commit install` once.
@@ -253,7 +317,9 @@ Competitors tab shows the pending profile with **Approve** / **Reject** buttons.
 
 ```bash
 pip install -e ".[demo]"
-cp .env.example .env          # add OPENAI_API_KEY
+cp .env.example .env          # add OPENAI_API_KEY and the local Postgres values
+docker compose up -d db
+python scripts/init_db.py
 streamlit run app.py
 ```
 

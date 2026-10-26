@@ -18,11 +18,13 @@ dependencies = [
     "langgraph-checkpoint-sqlite==3.1.2",
     "openai==3.29.0",
     "pydantic-settings==2.15.0",
+    "psycopg[binary]==3.3.6",
 ]
 
 [project.optional-dependencies]
 dev = [
     "pytest==9.1.1",
+    "pytest-socket==0.8.1",
     "pre-commit==4.7.0",
     "detect-secrets==1.5.0",
 ]
@@ -37,3 +39,7 @@ packages = ["src/market_intelligence"]
 [tool.pytest.ini_options]
 pythonpath = ["src", "."]
 testpaths = ["tests"]
+markers = [
+    "enable_socket: allows real socket access (the local Postgres integration tests)",
+    "integration: requires a real local Postgres database (TEST_DATABASE_URL)",
+]

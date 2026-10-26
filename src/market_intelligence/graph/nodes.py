@@ -10,7 +10,11 @@ from market_intelligence.agents.news import ingest_news
 from market_intelligence.agents.tone import analyze_news_tone
 from market_intelligence.agents.topics import identify_topics
 from market_intelligence.graph.state import MarketIntelligenceState
-from market_intelligence.persistence import NullProfileWriter, ProfileWriter
+from market_intelligence.persistence import (
+    CommitOutcomeUnknown,
+    ProfileWriter,
+    default_profile_writer,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -116,10 +120,13 @@ def persist_node(
     """Persist an approved run, then mark it complete.
 
     The status only becomes ``complete`` after the injected writer returns. A
-    writer failure is captured in state (``persist_failed``) so the UI can show
-    that nothing was saved instead of reporting success.
+    writer failure that was reconciled as not stored becomes ``persist_failed``;
+    a connection lost around commit, where the database cannot confirm either
+    outcome, becomes ``persist_unknown``. The UI must not claim that nothing was
+    saved when the outcome is genuinely unknown. ``writer=None`` selects the
+    configured writer and fails loudly when no database is configured.
     """
-    writer = writer or NullProfileWriter()
+    writer = writer or default_profile_writer()
     run_id = (config or {}).get("configurable", {}).get("thread_id")
     if not run_id:
         return {
@@ -129,6 +136,12 @@ def persist_node(
 
     try:
         persisted_run_id = writer.persist(run_id, state)
+    except CommitOutcomeUnknown as exc:
+        logger.error("Persistence outcome unknown for run %s: %s", run_id, exc)
+        return {
+            "status": "persist_unknown",
+            "error": str(exc),
+        }
     except Exception as exc:  # surface any writer failure as a failed run
         logger.exception("Persistence failed for run %s", run_id)
         return {
