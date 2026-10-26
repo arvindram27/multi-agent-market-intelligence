@@ -11,12 +11,14 @@ from pydantic import SecretStr
 from market_intelligence.config import settings
 from market_intelligence.graph.nodes import persist_node
 from market_intelligence.persistence import (
+    CommitOutcomeUnknown,
     PersistenceError,
     PersistenceNotConfigured,
     UnapprovedRunError,
     UnconfiguredProfileWriter,
     default_profile_writer,
     redact_secrets,
+    sanitize_for_output,
 )
 from market_intelligence.persistence_postgres import (
     PostgresProfileWriter,
@@ -122,3 +124,155 @@ def test_connection_failure_never_leaks_credentials(sample_state, caplog):
     # The original exception must not ride along in a chained traceback.
     assert info.value.__cause__ is None
     assert info.value.__suppress_context__ is True
+
+
+def test_sanitize_for_output_has_no_ambient_coupling():
+    """The public boundary redacts patterns even without the writer's secrets."""
+    dsn = "postgresql://someone:hunter2-fake@db.internal:5432/app"  # pragma: allowlist secret
+    message = sanitize_for_output(RuntimeError(f"connect failed: {dsn}"))
+
+    assert message.startswith("RuntimeError: ")
+    assert "hunter2-fake" not in message
+    assert "db.internal" not in message
+    assert "postgresql://***" in message
+
+
+def test_unconfirmed_rollback_stays_unknown(sample_state):
+    """A body failure whose rollback cannot be confirmed is not a known failure."""
+
+    class _Cursor:
+        def fetchone(self):
+            return None
+
+    class _UnconfirmedRollback:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            if exc_type is None:
+                return False
+            raise psycopg.OperationalError("connection lost while rolling back")
+
+    class _Connection:
+        closed = False
+        broken = False
+
+        def __init__(self):
+            self.calls = 0
+
+        def execute(self, sql, params=()):
+            self.calls += 1
+            if self.calls == 1:
+                return _Cursor()
+            raise psycopg.errors.ForeignKeyViolation("child insert failed")
+
+        def transaction(self):
+            return _UnconfirmedRollback()
+
+        def close(self):
+            self.closed = True
+
+    calls = {"count": 0}
+
+    def factory():
+        calls["count"] += 1
+        if calls["count"] == 1:
+            return _Connection()
+        raise psycopg.OperationalError("cannot reopen to reconcile")
+
+    writer = PostgresProfileWriter(
+        "postgresql://market_intel:fake@127.0.0.1:1/db",  # pragma: allowlist secret
+        connection_factory=factory,
+    )
+    with pytest.raises(CommitOutcomeUnknown) as info:
+        writer.persist("run-1", sample_state())
+
+    message = str(info.value)
+    assert "may or may not" in message
+    assert "unchanged snapshot" in message
+    assert "no snapshot was stored" not in message
+    assert "no rows" not in message
+
+
+def test_writer_refuses_verified_evidence_for_an_unknown_article(sample_state):
+    state = sample_state()
+    # Flip the unresolved citation to "verified": its article is not captured.
+    state.topics[0].evidence[1].verified = True
+
+    def forbidden_factory():  # the guard must fail before connecting
+        raise AssertionError("connected before checking evidence invariants")
+
+    writer = PostgresProfileWriter(
+        "postgresql://market_intel:fake@127.0.0.1:1/db",  # pragma: allowlist secret
+        connection_factory=forbidden_factory,
+    )
+    with pytest.raises(PersistenceError, match="integrity invariant"):
+        writer.persist("run-1", state)
+
+
+def test_writer_refuses_a_tone_for_an_uncaptured_article(sample_state):
+    state = sample_state()
+    state.tones = [
+        state.tones[0].model_copy(update={"article_id": "ghost-article"})
+    ]
+
+    def forbidden_factory():
+        raise AssertionError("connected before checking evidence invariants")
+
+    writer = PostgresProfileWriter(
+        "postgresql://market_intel:fake@127.0.0.1:1/db",  # pragma: allowlist secret
+        connection_factory=forbidden_factory,
+    )
+    with pytest.raises(PersistenceError, match="integrity invariant"):
+        writer.persist("run-1", state)
+
+
+def test_unexpected_writer_error_is_sanitized_in_state_and_logs(
+    sample_state, caplog
+):
+    secret = "fake-password-4a7e"  # pragma: allowlist secret
+    dsn = f"postgresql://market_intel:{secret}@127.0.0.1:5432/market_intelligence"
+
+    class ExplodingWriter:
+        def persist(self, run_id, state):
+            try:
+                raise RuntimeError(f"driver failed for {dsn}")
+            except RuntimeError as inner:
+                raise RuntimeError("persistence failed") from inner
+
+    with caplog.at_level(logging.ERROR):
+        result = persist_node(
+            sample_state(), _run_config(), writer=ExplodingWriter()
+        )
+
+    assert result["status"] == "persist_failed"
+    assert result["error"].startswith("RuntimeError: ")
+    assert secret not in result["error"]
+    assert dsn not in result["error"]
+    assert secret not in caplog.text
+    assert dsn not in caplog.text
+    # No traceback or chained cause is formatted outward.
+    assert all(record.exc_info is None for record in caplog.records)
+
+
+def test_unknown_outcome_is_sanitized_and_qualified(sample_state, caplog):
+    secret = "fake-password-2d9c"  # pragma: allowlist secret
+    dsn = f"postgresql://market_intel:{secret}@127.0.0.1:5432/market_intelligence"
+
+    class UnknownWriter:
+        def persist(self, run_id, state):
+            raise CommitOutcomeUnknown(
+                f"commit may have landed; conninfo was {dsn}"
+            )
+
+    with caplog.at_level(logging.ERROR):
+        result = persist_node(sample_state(), _run_config(), writer=UnknownWriter())
+
+    assert result["status"] == "persist_unknown"
+    assert "CommitOutcomeUnknown" in result["error"]
+    assert "commit may have landed" in result["error"]
+    assert secret not in result["error"]
+    assert dsn not in result["error"]
+    assert secret not in caplog.text
+    assert dsn not in caplog.text
+    assert all(record.exc_info is None for record in caplog.records)

@@ -7,9 +7,22 @@ top-level transaction whose exit issues COMMIT. (Opening ``transaction()`` on a
 connection that is already inside a transaction would only create a savepoint
 and release it; that is not used here.)
 
-Retries are idempotent: the unique ``(run_id, content_hash)`` constraint decides
-whether a snapshot already exists. A failed connection around commit is
-reconciled against the database before the writer claims success or failure.
+Failure classification follows the transaction phase that was actually reached:
+
+* the connection could not be opened -> no transaction started, so nothing was
+  written (known failure);
+* the transaction body failed and psycopg rolled it back, and the connection
+  reports no open transaction afterwards -> no commit was issued (known
+  failure, with the rollback named in the message);
+* anything raised while COMMIT itself was in flight -> the outcome is unknown.
+  A ``SELECT`` that finds no row on another connection is *not* proof that the
+  original transaction cannot still commit; it only means the row was not
+  visible at that instant. Absence therefore stays ``persist_unknown``.
+
+Re-persisting the *unchanged* snapshot (same ``run_id``, same ``content_hash``)
+is deduplicated by the unique constraint. Changed business content is stored as
+a new version. The writer never mutates ``state`` and never regenerates
+provenance values or the hash, so a retry reuses the frozen snapshot.
 """
 from __future__ import annotations
 
@@ -20,6 +33,7 @@ from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Callable
 
 import psycopg
+from psycopg.pq import TransactionStatus
 from psycopg.types.json import Jsonb
 
 from market_intelligence.db import SCHEMA_VERSION
@@ -162,6 +176,66 @@ def _dsn_secrets(dsn: str) -> tuple[str, ...]:
     return tuple(secrets)
 
 
+class _TransactionAborted(Exception):
+    """The transaction body failed and psycopg confirmed a rollback."""
+
+    def __init__(self, detail: str):
+        self.detail = detail
+        super().__init__(detail)
+
+
+def _transaction_is_closed(conn) -> bool:
+    """True when the connection is healthy and holds no open transaction.
+
+    Only used after the transaction block has unwound from a body failure: a
+    healthy, idle connection means psycopg issued ROLLBACK and no COMMIT was
+    attempted. A broken connection or a still-open transaction is ambiguous.
+    """
+    try:
+        return (
+            not conn.closed
+            and not conn.broken
+            and conn.info.transaction_status == TransactionStatus.IDLE
+        )
+    except Exception:  # pragma: no cover - defensive for exotic connections
+        return False
+
+
+def _check_invariants(state: "MarketIntelligenceState") -> None:
+    """Fail closed when a state was built outside the graph and is inconsistent.
+
+    The pipeline guarantees two evidence invariants:
+
+    * ``TopicEvidence.verified`` is set only when the topic agent resolved the
+      citation to a captured article and matched the quote verbatim, so a
+      verified citation must name an article in this snapshot;
+    * every ``NewsTone`` was assessed from a captured summary, so its
+      ``article_id`` must name an article in this snapshot.
+
+    Foreign keys enforce the same rules in the database. This check exists so an
+    externally constructed state fails with a clear message before any write,
+    and it never relaxes the constraints or drops evidence.
+    """
+    article_ids = {item.article_id for item in state.summaries}
+
+    for tone in state.tones:
+        if tone.article_id not in article_ids:
+            raise PersistenceError(
+                "evidence integrity invariant violated: a tone references "
+                f"article {tone.article_id!r}, which is not in this snapshot; "
+                "refusing to persist"
+            )
+
+    for topic in state.topics:
+        for evidence in topic.evidence:
+            if evidence.verified and evidence.article_id not in article_ids:
+                raise PersistenceError(
+                    "evidence integrity invariant violated: verified topic "
+                    f"evidence references article {evidence.article_id!r}, "
+                    "which is not in this snapshot; refusing to persist"
+                )
+
+
 class PostgresProfileWriter:
     """Durable writer for approved runs. One call, one committed transaction."""
 
@@ -187,13 +261,14 @@ class PostgresProfileWriter:
             raise UnapprovedRunError(
                 "refusing to persist a run that was not explicitly approved"
             )
+        _check_invariants(state)
 
         payload = business_payload(state)
         canonical = canonical_json(payload)
         digest = content_hash(canonical)
 
-        # A failure to connect proves nothing was written: report a known
-        # failure instead of an unknown outcome.
+        # A failure to connect proves nothing was written: no transaction was
+        # ever started, so this is a known failure.
         try:
             conn = self._connection_factory()
         except (psycopg.Error, OSError) as exc:
@@ -204,29 +279,55 @@ class PostgresProfileWriter:
             ) from None
 
         try:
-            self._write(conn, run_id, digest, canonical, state)
+            outcome = self._write(conn, run_id, digest, canonical, state)
+        except _TransactionAborted as aborted:
+            # psycopg rolled the transaction back and the connection confirmed
+            # it holds no open transaction: no COMMIT was issued.
+            logger.error(
+                "Write for run %s was rolled back: %s", run_id, aborted.detail
+            )
+            raise PersistenceError(
+                "the database write failed and was rolled back; "
+                "no snapshot was stored: " + aborted.detail
+            ) from None
         except (psycopg.Error, OSError) as exc:
+            # Any failure from COMMIT, or a rollback we could not confirm, is
+            # genuinely ambiguous. Absence is not proof of a rollback.
             safe = self._sanitize(exc)
-            logger.error("Postgres write failed for run %s: %s", run_id, safe)
-            outcome = self._reconcile(run_id, digest)
-            if outcome is True:
+            logger.error(
+                "Postgres write for run %s has an ambiguous commit outcome: %s",
+                run_id,
+                safe,
+            )
+            reconciled = self._reconcile(run_id, digest, canonical)
+            if reconciled is True:
                 logger.warning(
-                    "Run %s was stored even though the client lost the commit "
-                    "confirmation; reconciled without rewriting.",
+                    "Run %s: a matching snapshot is present; reconciled to "
+                    "success without rewriting.",
                     run_id,
                 )
                 return run_id
-            if outcome is False:
-                raise PersistenceError(
-                    "database write failed and no snapshot was stored: " + safe
-                ) from None
             raise CommitOutcomeUnknown(
-                "the database connection failed around commit and the snapshot "
-                "could not be reconciled; the write may or may not have been "
-                "stored. Re-approving is safe and deduplicated. " + safe
+                "the connection failed while a commit was in flight and no "
+                "matching snapshot was visible afterwards. The write may or may "
+                "not have been stored. Re-persisting the unchanged snapshot "
+                "(same run id and content hash) is safe and deduplicated; "
+                "changed content is stored as a new version. " + safe
             ) from None
         finally:
-            conn.close()
+            # Cleanup must never change an outcome that was already established.
+            try:
+                conn.close()
+            except Exception as exc:  # pragma: no cover - defensive
+                logger.warning(
+                    "Could not close the connection for run %s: %s",
+                    run_id,
+                    self._sanitize(exc),
+                )
+
+        logger.info(
+            "Approved run %s: %s snapshot %s", run_id, outcome, digest[:12]
+        )
         return run_id
 
     # -- internals ---------------------------------------------------------
@@ -247,34 +348,66 @@ class PostgresProfileWriter:
         digest: str,
         canonical: str,
         state: "MarketIntelligenceState",
-    ) -> None:
+    ) -> str:
+        """Write one snapshot. Returns ``"inserted"`` or ``"existing"``.
+
+        Failures are classified by the phase that raised: an error from the
+        transaction body with a confirmed rollback becomes
+        :class:`_TransactionAborted`; an error from COMMIT (or from a rollback
+        that could not be confirmed) propagates as ambiguous.
+        """
         payload = json.loads(canonical)
-        with conn.transaction():
-            # Bound a stuck database without affecting the session default.
-            conn.execute(
-                f"SET LOCAL statement_timeout = {self._statement_timeout_ms}"
-            )
-            row = conn.execute(
-                _INSERT_RUN,
-                (
-                    run_id,
-                    digest,
-                    SCHEMA_VERSION,
-                    state.rss_url,
-                    state.competitor_url,
-                    state.num_articles,
-                    Jsonb(list(state.warnings)),
-                    Jsonb(payload),
-                ),
-            ).fetchone()
-            if row is None:
-                # Identical snapshot already committed. Nothing to write.
-                return
-            version_id = row[0]
-            self._insert_articles(conn, version_id, state)
-            self._insert_topics(conn, version_id, state)
-            self._insert_tones(conn, version_id, state)
-            self._insert_competitor(conn, version_id, state)
+        body_error: BaseException | None = None
+        outcome = "inserted"
+        try:
+            with conn.transaction():
+                try:
+                    # Bound a stuck database without affecting the session
+                    # default.
+                    conn.execute(
+                        f"SET LOCAL statement_timeout = "
+                        f"{self._statement_timeout_ms}"
+                    )
+                    row = conn.execute(
+                        _INSERT_RUN,
+                        (
+                            run_id,
+                            digest,
+                            SCHEMA_VERSION,
+                            state.rss_url,
+                            state.competitor_url,
+                            state.num_articles,
+                            Jsonb(list(state.warnings)),
+                            Jsonb(payload),
+                        ),
+                    ).fetchone()
+                    if row is None:
+                        # Identical snapshot already committed: write nothing.
+                        outcome = "existing"
+                        return outcome
+                    version_id = row[0]
+                    self._insert_articles(conn, version_id, state)
+                    self._insert_topics(conn, version_id, state)
+                    self._insert_tones(conn, version_id, state)
+                    self._insert_competitor(conn, version_id, state)
+                except BaseException as exc:
+                    body_error = exc
+                    raise
+        except BaseException as exc:
+            if body_error is None:
+                # Raised while opening the transaction or by COMMIT itself;
+                # whether the server committed is unknown.
+                raise
+            if exc is not body_error:
+                # The rollback itself failed (or the connection broke while
+                # rolling back): the transaction may still be open.
+                raise
+            if not _transaction_is_closed(conn):
+                raise
+            if isinstance(body_error, (psycopg.Error, OSError)):
+                raise _TransactionAborted(self._sanitize(body_error)) from None
+            raise
+        return outcome
 
     def _insert_articles(self, conn, version_id: int, state) -> None:
         for ordinal, item in enumerate(state.summaries):
@@ -323,8 +456,11 @@ class PostgresProfileWriter:
                         version_id,
                         ordinal,
                         evidence.article_id,
-                        # Only verified citations resolve to a captured article;
-                        # unresolved citations are preserved with a NULL match.
+                        # Evidence invariant: the topic agent only marks a
+                        # citation verified after resolving it to a captured
+                        # article, so only those carry the composite foreign
+                        # key. Unresolved citations are preserved with a NULL
+                        # match and verified = false.
                         evidence.article_id if evidence.verified else None,
                         evidence.quote,
                         evidence.source_title,
@@ -385,25 +521,65 @@ class PostgresProfileWriter:
             ),
         )
 
-    def _snapshot_exists(self, run_id: str, digest: str) -> bool:
-        conn = self._connection_factory()
-        try:
-            row = conn.execute(
-                "SELECT 1 FROM runs WHERE run_id = %s AND content_hash = %s",
-                (run_id, digest),
-            ).fetchone()
-            return row is not None
-        finally:
-            conn.close()
+    def _reconcile(
+        self, run_id: str, digest: str, canonical: str
+    ) -> bool | None:
+        """True only for a present, matching snapshot; otherwise ``None``.
 
-    def _reconcile(self, run_id: str, digest: str) -> bool | None:
-        """True = committed, False = verified absent, None = cannot tell."""
+        ``None`` means "not observed", which is *not* the same as "not stored":
+        the original transaction may still commit. The caller must keep the
+        outcome unknown.
+        """
         try:
-            return self._snapshot_exists(run_id, digest)
+            conn = self._connection_factory()
         except Exception as exc:
             logger.error(
-                "Could not reconcile run %s after a failed write: %s",
+                "Could not reconnect to reconcile run %s: %s",
                 run_id,
                 self._sanitize(exc),
             )
             return None
+
+        try:
+            row = conn.execute(
+                "SELECT payload FROM runs "
+                "WHERE run_id = %s AND content_hash = %s",
+                (run_id, digest),
+            ).fetchone()
+        except Exception as exc:
+            logger.error(
+                "Reconciliation query failed for run %s: %s",
+                run_id,
+                self._sanitize(exc),
+            )
+            return None
+        finally:
+            # A failed cleanup must not mask "not observed" as success.
+            try:
+                conn.close()
+            except Exception:  # pragma: no cover - defensive
+                pass
+
+        if row is None:
+            logger.info(
+                "Reconciliation for run %s found no snapshot yet; the commit "
+                "outcome remains unknown.",
+                run_id,
+            )
+            return None
+
+        stored = row[0]
+        if isinstance(stored, str):
+            stored = json.loads(stored)
+        try:
+            matches = canonical_json(stored) == canonical
+        except (TypeError, ValueError):
+            matches = False
+        if not matches:
+            logger.error(
+                "Reconciliation found run %s with a different payload; the "
+                "commit outcome remains unknown.",
+                run_id,
+            )
+            return None
+        return True

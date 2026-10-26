@@ -156,8 +156,10 @@ python scripts/init_db.py        # second run is a no-op
 
 `schema.sql` is **initial setup, not a migration tool**. It creates missing tables and fails
 with a clear message when an existing table has an incompatible shape; it never drops or
-rewrites data. Introduce a real migration tool before changing a schema that holds data you
-care about.
+rewrites data. Verification is not name-only: it checks each required column's PostgreSQL
+type (`bigserial` is reported as `bigint`), the primary-key, unique and foreign-key
+definitions (including `ON DELETE` actions), and the `latest_runs` view. Introduce a real
+migration tool before changing a schema that holds data you care about.
 
 **What is stored.** One row in `runs` per snapshot, plus `run_articles`, `run_topics`,
 `run_topic_evidence`, `run_tones` and `competitor_profiles`. The full business payload is
@@ -170,17 +172,38 @@ citations carry an article foreign key. Tone scores and model confidence use
 **Identity and dedup.** `content_hash = sha256("mi-run-v1\n" + canonical JSON)`, where the
 canonical JSON is sorted, whitespace-free and contains only business content (inputs,
 summaries, topics, tones, competitor, warnings) — never status/error bookkeeping.
-`UNIQUE (run_id, content_hash)` makes an identical retry a no-op and leaves changed content
-as a second, visible version. `latest_runs` picks the highest `runs.id` per run; ids and
-`stored_at` reflect insertion/statement order, not commit or approval order.
+`UNIQUE (run_id, content_hash)` makes re-persisting the **unchanged** snapshot a no-op and
+leaves changed content as a second, visible version. A retry never regenerates timestamps,
+provenance or the hash: it reuses the frozen snapshot, so it is identical only if no business
+content changed. Changed content is stored separately, never merged into the earlier version.
+`latest_runs` picks the highest `runs.id` per run; ids and `stored_at` reflect
+insertion/statement order, not commit or approval order.
 
-**Transactions and failure.** Each snapshot is one top-level transaction. A connection lost
-around commit is reconciled with a fresh connection: if the snapshot is present the write
-is reported saved; if it is verifiably absent the run is `persist_failed`; if neither can
-be checked the run is `persist_unknown` and the UI says so instead of claiming nothing was
-saved. Re-approving after `persist_unknown` is safe and deduplicated. Concurrent writers can
-still contend, and deadlocks remain possible in general; a deadlock surfaces as a database
-error, rolls the snapshot back, and is safe to retry because the write is idempotent.
+**Transactions and failure.** Each snapshot is one top-level transaction. Failures are
+classified by the phase actually reached:
+
+- the connection could not be opened → no transaction started, so the run is a known
+  `persist_failed` ("no rows were stored");
+- the transaction body failed and psycopg rolled it back, confirmed by the connection
+  holding no open transaction → known `persist_failed` ("was rolled back");
+- anything raised while COMMIT was in flight → `persist_unknown`, unless a fresh connection
+  observes a present, matching snapshot (same run id, hash and payload), which reconciles to
+  success.
+
+Absence on a second connection is **not** proof that the original transaction cannot still
+commit, so an absent row keeps the outcome unknown; the UI never claims nothing was saved in
+that case. Retrying is safe for the unchanged snapshot because it is deduplicated. Concurrent
+writers can still contend, and deadlocks remain possible in general; a deadlock surfaces as a
+database error, rolls the snapshot back, and is safe to retry.
+
+**Evidence integrity invariant.** Verified topic evidence (`verified = true`) means the topic
+agent resolved the citation to a captured `NewsSummary` *and* matched the quote verbatim
+against that excerpt; only then is `matched_article_id` set and its composite foreign key
+enforced. Every `NewsTone` is a model assessment of a captured summary, so `run_tones`
+references `run_articles`. Unresolved citations are still stored (`verified = false`,
+`matched_article_id = NULL`) rather than dropped. A state built outside the graph must uphold
+the same invariants: the writer validates them before connecting and fails closed, and the
+foreign keys remain enforced — constraints are never relaxed to make a write succeed.
 
 **Limitations.** This is initial setup for one local developer machine: no migration tool,
 no retention/expiry policy, no row-level access control, and `latest_runs` is insertion
@@ -280,8 +303,10 @@ All RSS and competitor fetches go through one bounded client (`src/market_intell
   machine.
 - **Database credentials:** `DATABASE_URL` (and the test-only `TEST_DATABASE_URL`) live only
   in `.env`. The DSN is held as a `SecretStr`, never written to graph state or the UI, and
-  error messages/logs are scrubbed of both the DSN and its password. The Compose service has
-  no fallback password and refuses to start until `POSTGRES_PASSWORD` is set.
+  error messages/logs are scrubbed of both the DSN and its password. The graph re-sanitizes
+  every writer exception at the persistence boundary and logs without a traceback, so a
+  driver message cannot carry credentials outward. The Compose service has no fallback
+  password and refuses to start until `POSTGRES_PASSWORD` is set.
 - **Rotate immediately** if a key is ever pasted into chat, a log, or a ticket. Revoke it in
   the provider console and issue a new one — deleting the file does not undo the exposure.
 - **Pre-commit guard:** after `pip install -e ".[dev]"`, run `pre-commit install` once.

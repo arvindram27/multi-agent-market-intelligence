@@ -25,7 +25,13 @@ class PersistenceNotConfigured(PersistenceError):
 
 
 class CommitOutcomeUnknown(PersistenceError):
-    """The commit may or may not have landed; a retry is safe and deduplicated."""
+    """The commit may or may not have landed.
+
+    Reconciliation could not observe a matching snapshot, but absence is not
+    proof that the original transaction will not commit. Re-persisting the
+    *unchanged* snapshot (same ``run_id`` and ``content_hash``) is safe because
+    it is deduplicated; changed content is stored as a new version.
+    """
 
 
 class UnapprovedRunError(PersistenceError):
@@ -93,6 +99,10 @@ _DSN_URI_RE = re.compile(r"(?i)\bpostgres(?:ql)?://[^\s'\"<>]+")
 _PASSWORD_KV_RE = re.compile(
     r"(?i)\bpassword\s*=\s*(?:'[^']*'|\"[^\"]*\"|[^\s;'\"]+)"
 )
+# Any URL that embeds credentials in its authority section, not just Postgres.
+_URL_CREDENTIALS_RE = re.compile(
+    r"(?i)\b([a-z][a-z0-9+.\-]*://)[^/\s:@'\"<>]+:[^@\s/'\"<>]+@"
+)
 
 
 def redact_secrets(text: str, secrets: Iterable[str] = ()) -> str:
@@ -107,6 +117,24 @@ def redact_secrets(text: str, secrets: Iterable[str] = ()) -> str:
     # Longest first so a full DSN is removed before its password fragment.
     for secret in sorted((s for s in secrets if s), key=len, reverse=True):
         cleaned = cleaned.replace(secret, "***")
+    cleaned = _URL_CREDENTIALS_RE.sub(r"\1***:***@", cleaned)
     cleaned = _DSN_URI_RE.sub("postgresql://***", cleaned)
     cleaned = _PASSWORD_KV_RE.sub("password=***", cleaned)
     return cleaned
+
+
+def sanitize_for_output(value: object, secrets: Iterable[str] = ()) -> str:
+    """Public boundary for text that leaves persistence for state, UI or logs.
+
+    Callers such as the graph must not trust a writer to have scrubbed its own
+    exception. This applies pattern-based redaction to any exception or string
+    and is safe to apply twice. It never formats a traceback or exception
+    chain; only the type name and the redacted message are returned.
+    """
+    if value is None:
+        return ""
+    if isinstance(value, BaseException):
+        message = redact_secrets(str(value), secrets)
+        name = type(value).__name__
+        return f"{name}: {message}" if message else name
+    return redact_secrets(str(value), secrets)

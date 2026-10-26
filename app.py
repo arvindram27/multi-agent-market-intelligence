@@ -125,8 +125,9 @@ if state:
         detail = state.get("error") or ""
         st.warning(
             "Persistence outcome unknown — the snapshot may or may not have "
-            "been committed. Retrying is safe: identical snapshots are "
-            f"deduplicated by their run id and content hash. {detail}".strip(),
+            "been committed. Re-persisting the unchanged snapshot (same run id "
+            "and content hash) is safe and deduplicated; changed content is "
+            f"stored as a new version. {detail}".strip(),
             icon="⚠️",
         )
     elif state.get("error"):

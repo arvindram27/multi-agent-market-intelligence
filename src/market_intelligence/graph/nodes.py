@@ -14,6 +14,7 @@ from market_intelligence.persistence import (
     CommitOutcomeUnknown,
     ProfileWriter,
     default_profile_writer,
+    sanitize_for_output,
 )
 
 logger = logging.getLogger(__name__)
@@ -121,10 +122,14 @@ def persist_node(
 
     The status only becomes ``complete`` after the injected writer returns. A
     writer failure that was reconciled as not stored becomes ``persist_failed``;
-    a connection lost around commit, where the database cannot confirm either
-    outcome, becomes ``persist_unknown``. The UI must not claim that nothing was
-    saved when the outcome is genuinely unknown. ``writer=None`` selects the
-    configured writer and fails loudly when no database is configured.
+    a commit whose outcome cannot be established becomes ``persist_unknown``.
+    The UI must not claim that nothing was saved when the outcome is genuinely
+    unknown. ``writer=None`` selects the configured writer and fails loudly when
+    no database is configured.
+
+    Every exception is scrubbed by :func:`sanitize_for_output` before it reaches
+    state, the UI or a log record. Logging deliberately omits ``exc_info`` so a
+    driver traceback cannot carry a DSN or password outward.
     """
     writer = writer or default_profile_writer()
     run_id = (config or {}).get("configurable", {}).get("thread_id")
@@ -137,16 +142,18 @@ def persist_node(
     try:
         persisted_run_id = writer.persist(run_id, state)
     except CommitOutcomeUnknown as exc:
-        logger.error("Persistence outcome unknown for run %s: %s", run_id, exc)
+        detail = sanitize_for_output(exc)
+        logger.error("Persistence outcome unknown for run %s: %s", run_id, detail)
         return {
             "status": "persist_unknown",
-            "error": str(exc),
+            "error": detail,
         }
     except Exception as exc:  # surface any writer failure as a failed run
-        logger.exception("Persistence failed for run %s", run_id)
+        detail = sanitize_for_output(exc)
+        logger.error("Persistence failed for run %s: %s", run_id, detail)
         return {
             "status": "persist_failed",
-            "error": f"{type(exc).__name__}: {exc}",
+            "error": detail,
         }
 
     return {

@@ -3,8 +3,9 @@
 -- This is NOT a migration system. It creates the objects a fresh database needs
 -- and is safe to re-run because every object uses IF NOT EXISTS. It will not
 -- alter an existing table: `python scripts/init_db.py` verifies the resulting
--- schema afterwards and refuses to continue when an older/incompatible shape is
--- present, rather than dropping or rewriting data.
+-- schema afterwards (column types, primary/foreign-key and unique constraint
+-- definitions, and the latest_runs view) and refuses to continue when an
+-- older/incompatible shape is present, rather than dropping or rewriting data.
 --
 -- Identity: one row in `runs` per (run_id, canonical business payload). Two
 -- writes are the same snapshot when both run_id and content_hash match; the
