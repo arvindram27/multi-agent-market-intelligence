@@ -319,7 +319,9 @@ def test_failure_then_recovery(db, sample_state):
 
     print("failure message:", str(excinfo.value))
     assert _count(db, "runs") == 0
-    assert info.get("password", "") not in str(excinfo.value)
+    password = info.get("password")
+    if password:
+        assert password not in str(excinfo.value)
 
     PostgresProfileWriter(db).persist("run-recover", sample_state())
     assert _count(db, "runs") == 1
