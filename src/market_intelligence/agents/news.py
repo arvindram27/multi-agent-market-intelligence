@@ -2,8 +2,6 @@
 from __future__ import annotations
 
 import hashlib
-import html
-import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
@@ -12,18 +10,14 @@ import feedparser
 from market_intelligence.agents.llm import get_llm
 from market_intelligence.agents.schemas import NewsDigest, NewsSummary
 from market_intelligence.config import settings
-from market_intelligence.net import FetchResult, fetch_bytes
-
-FEED_CONTENT_TYPES = frozenset(
-    {
-        "application/rss+xml",
-        "application/atom+xml",
-        "application/rdf+xml",
-        "application/xml",
-        "text/xml",
-    }
+from market_intelligence.feed_parsing import (
+    FEED_CONTENT_TYPES,
+    article_id as _article_id,
+    clean_excerpt as _clean_excerpt,
+    entry_timestamp as _entry_timestamp,
+    published_at as _published_at,
 )
-_HTML_TAG_RE = re.compile(r"<[^<]+?>")
+from market_intelligence.net import FetchResult, fetch_bytes
 
 
 class IngestionError(Exception):
@@ -71,32 +65,6 @@ def checked_num_articles(num_articles: int | None) -> int:
             f"num_articles must be between 1 and {settings.max_articles}."
         )
     return num_articles
-
-
-def _clean_excerpt(value: str) -> str:
-    text = _HTML_TAG_RE.sub(" ", value or "")
-    return re.sub(r"\s+", " ", html.unescape(text)).strip()
-
-
-def _entry_timestamp(entry, key: str) -> str | None:
-    parsed = getattr(entry, key, None)
-    if not parsed:
-        return None
-    try:
-        return datetime(*parsed[:6], tzinfo=timezone.utc).isoformat()
-    except (TypeError, ValueError):
-        return None
-
-
-def _published_at(entry) -> str | None:
-    return _entry_timestamp(entry, "published_parsed") or _entry_timestamp(
-        entry, "updated_parsed"
-    )
-
-
-def _article_id(source_url: str | None, feed_url: str, published_at: str | None, content_hash: str) -> str:
-    key = f"{source_url or feed_url}|{published_at or ''}|{content_hash}"
-    return hashlib.sha256(key.encode("utf-8")).hexdigest()[:16]
 
 
 def ingest_news(

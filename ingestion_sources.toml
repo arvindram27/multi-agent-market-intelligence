@@ -1,0 +1,43 @@
+# Starter feed sources for the ingestion collector (landmark I1).
+#
+# User-editable. Validation is structural: unknown keys, duplicate source
+# keys/urls, non-http(s) urls and unsupported kinds are config errors, not
+# skips. Loading performs no DNS or network checks; the bounded HTTP client
+# validates each request at fetch time.
+# NOTE: tests never fetch these feeds with a live request; a real sweep is a
+# separate approval.
+
+[[sources]]
+key = "bbc-business"
+kind = "rss"
+label = "BBC Business"
+url = "https://feeds.bbci.co.uk/news/business/rss.xml"
+enabled = true
+
+[[sources]]
+key = "economic-times-markets"
+kind = "rss"
+label = "Economic Times Markets"
+url = "https://economictimes.indiatimes.com/markets/rssfeeds/1977081506.cms"
+enabled = true
+
+[[sources]]
+key = "moneycontrol-business"
+kind = "rss"
+label = "Moneycontrol Business"
+url = "https://www.moneycontrol.com/rss/business.xml"
+enabled = true
+
+[[sources]]
+key = "techcrunch"
+kind = "rss"
+label = "TechCrunch"
+url = "https://techcrunch.com/feed/"
+enabled = true
+
+[[sources]]
+key = "the-verge"
+kind = "atom"
+label = "The Verge"
+url = "https://www.theverge.com/rss/index.xml"
+enabled = true

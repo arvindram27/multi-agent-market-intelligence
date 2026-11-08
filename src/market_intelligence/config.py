@@ -32,6 +32,8 @@ class Settings(BaseSettings):
     max_articles: int = Field(default=10, ge=1, le=10)
     min_article_chars: int = Field(default=40, ge=0)
     max_competitor_chars: int = Field(default=8_000, gt=0)
+    # Per-source cap on how many feed entries one sweep may collect.
+    ingest_max_entries_per_source: int = Field(default=50, gt=0)
 
     # Per-call and per-run LLM limits. Costs are not guessed: the run is capped
     # by tokens and calls, and usage is reported separately.
