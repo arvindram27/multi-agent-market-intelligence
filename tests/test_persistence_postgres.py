@@ -23,6 +23,8 @@ from langgraph.types import Command
 
 from market_intelligence.agents.schemas import (
     ComparedFieldDraft,
+    CompetitorProfile,
+    CompetitorSource,
     EvidenceCitationDraft,
     NewsDigest,
     NewsToneDraft,
@@ -153,6 +155,34 @@ def _state_from_values(values) -> MarketIntelligenceState:
 # --------------------------------------------------------------------------
 def test_approved_write_persists_every_child(db, sample_state):
     state = sample_state()
+    # The shared sample is a comparison now. This test deliberately covers the
+    # legacy typed profile path, so build that input locally: comparison data
+    # goes to the payload only and must not create a competitor_profiles row.
+    assert state.comparison is not None
+    assert state.competitor is None
+    state.comparison = None
+    state.subject_name = ""
+    state.subject_pages = []
+    state.competitor_name = ""
+    state.competitor_pages = []
+    state.competitor_url = "https://acme.com"
+    state.competitor = CompetitorProfile(
+        company="Acme",
+        positioning="leader",
+        products=["widget"],
+        pricing_model="subscription",
+        funding_stage="seed",
+        strengths=["strong brand"],
+        weaknesses=["small team"],
+        sources=["https://acme.com"],
+        retrieved_sources=[
+            CompetitorSource(
+                url="https://acme.com",
+                retrieved_at="2026-10-21T12:05:00+00:00",
+                content_hash="b" * 64,
+            )
+        ],
+    )
     # Values described as exact must survive without decimal rounding.
     state.topics[0].model_confidence = 0.30000000000000004
     state.tones[0].score = -0.1234567890123
@@ -181,6 +211,31 @@ def test_approved_write_persists_every_child(db, sample_state):
     print("run header:", header)
     assert header[1] == content_hash(canonical_json(business_payload(state)))
     assert header[2] == SCHEMA_VERSION
+
+    legacy = _rows(
+        db,
+        "SELECT company, positioning, products, pricing_model, funding_stage, "
+        "strengths, weaknesses, sources, retrieved_sources, retrieved_at "
+        "FROM competitor_profiles",
+    )[0]
+    print("legacy competitor row:", legacy)
+    assert legacy[0] == "Acme"
+    assert legacy[1] == "leader"
+    assert legacy[2] == ["widget"]
+    assert legacy[3] == "subscription"
+    assert legacy[4] == "seed"
+    assert legacy[5] == ["strong brand"]
+    assert legacy[6] == ["small team"]
+    assert legacy[7] == ["https://acme.com"]
+    assert legacy[8] == [
+        {
+            "url": "https://acme.com",
+            "retrieved_at": "2026-10-21T12:05:00+00:00",
+            "content_hash": "b" * 64,
+        }
+    ]
+    assert legacy[9] is not None
+    assert legacy[9].microsecond == 0
 
     article = _rows(
         db,
@@ -213,6 +268,39 @@ def test_approved_write_persists_every_child(db, sample_state):
     stored = _stored_payload(db, "run-approved")
     rebuilt = MarketIntelligenceState(**stored)
     assert business_payload(rebuilt) == business_payload(state)
+
+
+def test_approved_write_persists_comparison_payload_only(db, sample_state):
+    state = sample_state()
+    assert state.comparison is not None
+    assert state.competitor is None
+    writer = PostgresProfileWriter(db)
+
+    returned = writer.persist("run-comparison-only", state)
+
+    assert returned == "run-comparison-only"
+    counts = _counts(db)
+    print("comparison child counts:", counts)
+    assert counts == {
+        "runs": 1,
+        "run_articles": 1,
+        "run_topics": 1,
+        "run_topic_evidence": 2,
+        "run_tones": 1,
+        "competitor_profiles": 0,
+    }
+
+    stored = _stored_payload(db, "run-comparison-only")
+    assert stored["comparison"] == state.comparison.model_dump(mode="json")
+    assert "competitor" not in stored
+    rebuilt = MarketIntelligenceState(**stored)
+    assert business_payload(rebuilt) == business_payload(state)
+    header_url = _one(
+        db,
+        "SELECT competitor_url FROM runs WHERE run_id = %s",
+        ("run-comparison-only",),
+    )
+    assert header_url == state.competitor_pages[0]
 
 
 def test_unparseable_published_at_is_preserved(db, sample_state):
