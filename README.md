@@ -217,6 +217,69 @@ Run the real-database tests separately from the offline suite:
 .venv\Scripts\python.exe -m pytest -q -m integration                          # real Postgres
 ```
 
+### SQL analysis over stored runs
+
+The read-only analysis layer summarises the durable ingestion store (the
+`ingest_*` tables, `raw_articles` and the `latest_articles` view):
+
+```bash
+python -m market_intelligence.analysis                       # DATABASE_URL, text
+python -m market_intelligence.analysis --format json         # machine-readable readout
+python -m market_intelligence.analysis --stale-hours 48 --recent-sweeps 10
+```
+
+Each connection is a **server-enforced read-only session**
+(`default_transaction_read_only=on`, a statement timeout and an application
+name): the server rejects writes in that session, and the layer itself issues
+only single `SELECT` statements - no `SET`, no DDL, no temporary tables and no
+`EXPLAIN ANALYZE`. That is defense in depth alongside a future read-only DB
+role, not an immutable guarantee. The DSN comes from `--dsn` or `DATABASE_URL`
+and is never rewritten or printed.
+
+The report covers per-source volume (stored content versions and distinct
+entries, with an entry-level `latest_entries` count from `latest_articles`),
+freshness (`age_seconds` and `stale`; both `n/a` when the source has no
+observations), sweep status and replay rate (`replayed / (stored + replayed)`,
+`n/a` when the denominator is zero), source outcome/error counts from each
+sweep's JSONB snapshot, and entries that accumulated more than one content
+version. A database with none of those objects reports "not initialized" and
+still exits 0; a partial or incompatible present schema fails closed with the
+problems listed and nothing modified.
+
+Output is deterministic: sections render in a fixed order and every query has
+a full `ORDER BY` with a tiebreaker. Each query runs in its own read-only
+snapshot, so the report is advisory rather than a single consistent
+multi-query snapshot; `age_seconds` is relative to the report's
+`generated_at`.
+
+Example output (illustrative values):
+
+```text
+Market intelligence - SQL analysis
+report_version: 1
+generated_at: 2026-11-09T12:00:00+00:00
+
+Ingestion store: available
+recent_limit: 20
+sources: 2 (enabled 2, disabled 0)
+source_key | label | enabled | versions | entries | latest_entries | first_seen_at | last_seen_at | age_seconds | stale
+bbc-business | BBC Business | True | 12 | 10 | 9 | 2026-11-01T08:00:00+00:00 | 2026-11-09T11:58:00+00:00 | 120 | no
+
+sweeps: 3 (complete 2, partial 1, failed 0, other 0)
+articles: seen 42, stored 30, replayed 8, replay_rate 21.1%
+source outcomes (recent 20 sweeps): ok=5, failed=1, disabled=0
+error classes: TransientFetchError
+elements with no error_class: 5
+malformed source_results snapshots: 0
+
+multi-version entries:
+  bbc-business: 2
+
+recent sweeps:
+sweep_id | status | finished_at | attempted | succeeded | failed | seen | stored | replayed | replay_rate
+...
+```
+
 ### Example Output
 The orchestrator will:
 1. Fetch and summarize recent RSS excerpts
