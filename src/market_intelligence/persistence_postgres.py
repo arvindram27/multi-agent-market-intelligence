@@ -51,7 +51,7 @@ logger = logging.getLogger(__name__)
 
 # Prefixing the hash keeps a future payload-version change from colliding with
 # snapshots written by this version.
-CANONICAL_HASH_PREFIX = "mi-run-v1\n"
+CANONICAL_HASH_PREFIX = "mi-run-v2\n"
 
 _INSERT_RUN = """
 INSERT INTO runs (
@@ -135,14 +135,19 @@ def business_payload(state: "MarketIntelligenceState") -> dict[str, Any]:
     """
     return {
         "rss_url": state.rss_url,
-        "competitor_url": state.competitor_url,
+        "subject_name": state.subject_name,
+        "subject_pages": list(state.subject_pages),
+        "competitor_name": state.competitor_name,
+        "competitor_pages": list(state.competitor_pages),
         "num_articles": state.num_articles,
         "warnings": list(state.warnings),
         "summaries": [item.model_dump(mode="json") for item in state.summaries],
         "topics": [item.model_dump(mode="json") for item in state.topics],
         "tones": [item.model_dump(mode="json") for item in state.tones],
-        "competitor": (
-            state.competitor.model_dump(mode="json") if state.competitor else None
+        "comparison": (
+            state.comparison.model_dump(mode="json")
+            if state.comparison
+            else None
         ),
     }
 
@@ -234,6 +239,82 @@ def _check_invariants(state: "MarketIntelligenceState") -> None:
                     f"evidence references article {evidence.article_id!r}, "
                     "which is not in this snapshot; refusing to persist"
                 )
+
+    _check_comparison_invariants(state)
+
+
+def _check_comparison_invariants(state: "MarketIntelligenceState") -> None:
+    """Validate comparison structure only; quote support is checked at build time.
+
+    This does not re-prove that a quote appears in the fetched page. It only
+    refuses a hand-forged state whose structure contradicts itself, before any
+    write.
+    """
+    comparison = state.comparison
+    if comparison is None:
+        return
+
+    for side_name, side in (
+        ("subject", comparison.subject),
+        ("competitor", comparison.competitor),
+    ):
+        pages = side.pages
+        if not 1 <= len(pages) <= 2:
+            raise PersistenceError(
+                "comparison invariant violated: "
+                f"{side_name} must have 1-2 retrieved pages; refusing to persist"
+            )
+        page_ids = [page.source_id for page in pages]
+        if len(set(page_ids)) != len(page_ids) or any(
+            page_id not in {"S1", "S2"} for page_id in page_ids
+        ):
+            raise PersistenceError(
+                "comparison invariant violated: "
+                f"{side_name} page source IDs must be unique S1/S2; "
+                "refusing to persist"
+            )
+
+        for field_name in ("product_focus", "pricing_model", "positioning"):
+            field = getattr(side, field_name)
+            if field.value is None:
+                if field.evidence:
+                    raise PersistenceError(
+                        "comparison invariant violated: "
+                        f"{side_name}.{field_name} has evidence without a value; "
+                        "refusing to persist"
+                    )
+                continue
+            if not field.value.strip():
+                raise PersistenceError(
+                    "comparison invariant violated: "
+                    f"{side_name}.{field_name} has a blank value; "
+                    "refusing to persist"
+                )
+            if len(field.value) > 160:
+                raise PersistenceError(
+                    "comparison invariant violated: "
+                    f"{side_name}.{field_name} value exceeds 160 chars; "
+                    "refusing to persist"
+                )
+            if not 1 <= len(field.evidence) <= 1:
+                raise PersistenceError(
+                    "comparison invariant violated: "
+                    f"{side_name}.{field_name} must carry exactly one citation; "
+                    "refusing to persist"
+                )
+            for evidence in field.evidence:
+                if evidence.source_id not in page_ids:
+                    raise PersistenceError(
+                        "comparison invariant violated: "
+                        f"{side_name}.{field_name} cites an unknown source; "
+                        "refusing to persist"
+                    )
+                if not evidence.quote.strip() or len(evidence.quote) > 160:
+                    raise PersistenceError(
+                        "comparison invariant violated: "
+                        f"{side_name}.{field_name} has an empty or oversized "
+                        "quote; refusing to persist"
+                    )
 
 
 class PostgresProfileWriter:
@@ -375,7 +456,11 @@ class PostgresProfileWriter:
                             digest,
                             SCHEMA_VERSION,
                             state.rss_url,
-                            state.competitor_url,
+                            (
+                                state.competitor_pages[0]
+                                if state.competitor_pages
+                                else state.competitor_url
+                            ),
                             state.num_articles,
                             Jsonb(list(state.warnings)),
                             Jsonb(payload),

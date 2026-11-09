@@ -154,3 +154,74 @@ class CompetitorProfile(CompetitorProfileDraft):
 
     sources: list[str] = Field(default_factory=list)
     retrieved_sources: list[CompetitorSource] = Field(default_factory=list)
+
+
+class PageSource(BaseModel):
+    """A page retrieved for one side of a comparison.
+
+    The fetched page text is deliberately not stored: the content hash
+    fingerprints it, and quote validation happens during construction against
+    the exact capped text that was sent to the model.
+    """
+
+    source_id: str
+    url: str
+    retrieved_at: str
+    content_hash: str
+
+
+class ComparisonEvidence(BaseModel):
+    """A model-selected quote tied to one retrieved page."""
+
+    source_id: str
+    quote: str
+
+
+class ComparisonField(BaseModel):
+    """One compared attribute.
+
+    ``evidence`` is empty exactly when ``value`` is None: a populated field
+    always carries at least one validated citation.
+    """
+
+    value: str | None = None
+    evidence: list[ComparisonEvidence] = Field(default_factory=list)
+
+
+class CompanyComparison(BaseModel):
+    """One side of the subject-vs-competitor comparison."""
+
+    name: str
+    pages: list[PageSource] = Field(default_factory=list)
+    product_focus: ComparisonField
+    pricing_model: ComparisonField
+    positioning: ComparisonField
+
+
+class Comparison(BaseModel):
+    """Subject and competitor compared side by side."""
+
+    subject: CompanyComparison
+    competitor: CompanyComparison
+
+
+class EvidenceCitationDraft(BaseModel):
+    """Model output: one quote with the source ID it was copied from."""
+
+    source_id: str = Field(pattern=r"^S[12]$")
+    quote: str = Field(min_length=1, max_length=160)
+
+
+class ComparedFieldDraft(BaseModel):
+    """Model output for one field, with at most one citation."""
+
+    value: str | None = Field(default=None, max_length=160)
+    evidence: list[EvidenceCitationDraft] = Field(default_factory=list, max_length=1)
+
+
+class SideComparisonDraft(BaseModel):
+    """Model output for one company: the three compared fields."""
+
+    product_focus: ComparedFieldDraft
+    pricing_model: ComparedFieldDraft
+    positioning: ComparedFieldDraft

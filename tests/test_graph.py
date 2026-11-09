@@ -7,9 +7,11 @@ from langgraph.checkpoint.sqlite import SqliteSaver
 from langgraph.types import Command
 
 from market_intelligence.agents.schemas import (
-    CompetitorProfileDraft,
+    ComparedFieldDraft,
+    EvidenceCitationDraft,
     NewsDigest,
     NewsToneDraft,
+    SideComparisonDraft,
     TopicAnalysis,
     TopicFinding,
 )
@@ -25,6 +27,20 @@ FEED_XML = b"""<?xml version="1.0" encoding="UTF-8"?>
 </channel></rss>"""
 
 
+def _side_draft():
+    quote = "leading widget maker"
+    citation = [EvidenceCitationDraft(source_id="S1", quote=quote)]
+    return SideComparisonDraft(
+        product_focus=ComparedFieldDraft(
+            value="widgets", evidence=citation
+        ),
+        pricing_model=ComparedFieldDraft(),
+        positioning=ComparedFieldDraft(
+            value="widget maker", evidence=list(citation)
+        ),
+    )
+
+
 def _responses():
     return {
         NewsDigest: NewsDigest(headline="h", summary="s1", tone_hint="neutral"),
@@ -32,9 +48,7 @@ def _responses():
             topics=[TopicFinding(topic_name="AI", model_confidence=0.8)]
         ),
         NewsToneDraft: NewsToneDraft(overall="positive", score=0.5),
-        CompetitorProfileDraft: CompetitorProfileDraft(
-            company="Acme", positioning="leader"
-        ),
+        SideComparisonDraft: [_side_draft(), _side_draft()],
     }
 
 
@@ -58,7 +72,10 @@ def _mock_io(monkeypatch):
 def _inputs():
     return {
         "rss_url": "http://example.com/feed.xml",
-        "competitor_url": "https://acme.com",
+        "subject_name": "Acme",
+        "subject_pages": ["https://acme.com"],
+        "competitor_name": "Rival",
+        "competitor_pages": ["https://rival.com"],
         "num_articles": 1,
     }
 
@@ -100,7 +117,8 @@ def test_graph_runs_to_approval_interrupt(fake_llm, monkeypatch):
     assert snap.next == ("review_profile",)
     values = _values(snap)
     assert values["status"] == "awaiting_approval"
-    assert values["competitor"].company == "Acme"
+    assert values["comparison"].subject.name == "Acme"
+    assert values["comparison"].competitor.name == "Rival"
     assert values["summaries"][0].summary == "s1"
     assert values["topics"][0].topic_name == "AI"
     assert values["tones"][0].overall == "positive"
@@ -181,7 +199,7 @@ def test_approval_writes_once_and_reports_the_run_id(fake_llm, monkeypatch):
     assert len(writer.calls) == 1
     run_id, persisted_state = writer.calls[0]
     assert run_id == "run-1"
-    assert persisted_state.competitor.company == "Acme"
+    assert persisted_state.comparison.subject.name == "Acme"
     values = _values(graph.get_state(_config()))
     assert values["status"] == "complete"
     assert values["persisted_run_id"] == "run-1"

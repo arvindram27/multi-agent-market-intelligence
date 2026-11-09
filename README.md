@@ -34,7 +34,7 @@ A comprehensive multi-agent system designed to automate market intelligence gath
 
 ### Core Agents
 - **News Summarization Agent**: Monitors RSS feeds and creates summaries with source provenance
-- **Competitor Analysis Agent**: Fetches a competitor page and records the retrieved source
+- **Comparisons Agent**: Fetches the named subject and competitor pages and extracts a side-by-side comparison with per-field quotes
 - **Topic Extraction Agent**: Extracts topics from one RSS snapshot with cited evidence spans
 - **News Tone Agent**: Model-assesses the tone of the news summaries (not consumer sentiment)
 
@@ -172,7 +172,10 @@ config = {"configurable": {"thread_id": "demo-1"}}
 graph.invoke(
     {
         "rss_url": "https://feeds.bbci.co.uk/news/business/rss.xml",
-        "competitor_url": "https://www.google.com/about/",
+        "subject_name": "Your company",
+        "subject_pages": ["https://example.com/product", "https://example.com/pricing"],
+        "competitor_name": "Competitor",
+        "competitor_pages": ["https://competitor.example/product"],
         "num_articles": 2,
     },
     config,
@@ -405,7 +408,7 @@ The orchestrator will:
 1. Fetch and summarize recent RSS excerpts
 2. Extract topics from the captured excerpts, with source IDs and evidence quotes
 3. Model-assess the tone of the news summaries
-4. Scrape competitor information from a predefined URL and record the retrieved source
+4. Fetch the named subject and competitor pages and extract a side-by-side comparison with per-field quotes and source IDs
 5. Display coordinated results from all agents
 
 ### 🔎 Provenance and limits
@@ -422,8 +425,12 @@ Every displayed item is tied to a captured source record:
 - **Model confidence** is the LLM's own 0–1 self-rating. It is not a calibrated probability.
 - **News tone** is a model assessment of the model-written summary. It is not consumer
   sentiment, a survey, or a measured population opinion.
-- **Competitor sources** are built from the page actually retrieved (final URL, retrieval
-  time, content hash), not from links the model invents.
+- **Comparison sources** are built from the pages actually retrieved (final URL,
+  retrieval time, content hash), not from links the model invents. Each populated
+  field carries at most one quote, verified after whitespace normalization to
+  appear in the exact capped page text sent to the model. This mechanical check
+  does not prove that the quote entails the claim; that judgment stays with the
+  reviewer at the approval gate.
 
 > Schema note: this version stores `topics` and `tones` instead of the earlier `trends`
 > and `sentiments` fields. Reset old local checkpoint threads before using them with this
@@ -501,7 +508,9 @@ All RSS and competitor fetches go through one bounded client (`src/market_intell
 ### 💰 Cost per run
 
 **Measured** on 2026-10-21 with `gpt-4o-mini`, 2 BBC Business RSS articles, and
-`https://www.google.com/about/` as the competitor page:
+one competitor page (the pre-comparison single-profile pipeline). The comparison
+milestone makes one structured call per side, so the nominal count for the same
+2 articles is now 7 calls; this table is historical and has not been re-measured.
 
 | Metric | Value |
 |---|---|
@@ -519,7 +528,8 @@ was 16.6s.
 
 The demo drives the same `build_graph()` workflow, streams each node's completion into the
 status panel, and renders results into four tabs. When the graph hits the HITL interrupt, the
-Competitors tab shows the pending profile with **Approve** / **Reject** buttons.
+Competitors tab shows the pending subject-vs-competitor comparison with **Approve** / **Reject**
+buttons.
 
 ### Run it
 

@@ -22,9 +22,11 @@ from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.types import Command
 
 from market_intelligence.agents.schemas import (
-    CompetitorProfileDraft,
+    ComparedFieldDraft,
+    EvidenceCitationDraft,
     NewsDigest,
     NewsToneDraft,
+    SideComparisonDraft,
     TopicAnalysis,
     TopicFinding,
 )
@@ -814,6 +816,19 @@ FEED_XML = b"""<?xml version="1.0" encoding="UTF-8"?>
 </channel></rss>"""
 
 
+def _side_draft():
+    citation = [
+        EvidenceCitationDraft(source_id="S1", quote="leading widget maker")
+    ]
+    return SideComparisonDraft(
+        product_focus=ComparedFieldDraft(value="widgets", evidence=citation),
+        pricing_model=ComparedFieldDraft(),
+        positioning=ComparedFieldDraft(
+            value="widget maker", evidence=list(citation)
+        ),
+    )
+
+
 def _responses():
     return {
         NewsDigest: NewsDigest(headline="h", summary="s1", tone_hint="neutral"),
@@ -821,9 +836,7 @@ def _responses():
             topics=[TopicFinding(topic_name="AI", model_confidence=0.8)]
         ),
         NewsToneDraft: NewsToneDraft(overall="positive", score=0.5),
-        CompetitorProfileDraft: CompetitorProfileDraft(
-            company="Acme", positioning="leader"
-        ),
+        SideComparisonDraft: [_side_draft(), _side_draft()],
     }
 
 
@@ -845,7 +858,10 @@ def _mock_io(monkeypatch):
 def _inputs():
     return {
         "rss_url": "http://example.com/feed.xml",
-        "competitor_url": "https://acme.com",
+        "subject_name": "Acme",
+        "subject_pages": ["https://acme.com"],
+        "competitor_name": "Rival",
+        "competitor_pages": ["https://rival.com"],
         "num_articles": 1,
     }
 
@@ -886,4 +902,13 @@ def test_graph_approved_run_is_durable_after_api_returns(db, fake_llm, monkeypat
     assert business_payload(rebuilt) == business_payload(values)
     assert _count(db, "run_articles") == 1
     assert _count(db, "run_topics") == 1
-    assert _count(db, "competitor_profiles") == 1
+    # New runs carry the comparison in the payload only; the legacy typed
+    # table receives no row because state.competitor is None.
+    assert _count(db, "competitor_profiles") == 0
+    stored_comparison = stored["comparison"]
+    assert stored_comparison["subject"]["name"] == "Acme"
+    field = stored_comparison["competitor"]["product_focus"]
+    assert field["evidence"][0]["source_id"] == "S1"
+    assert field["evidence"][0]["quote"] == "leading widget maker"
+    page = stored_comparison["competitor"]["pages"][0]
+    assert len(page["content_hash"]) == 64

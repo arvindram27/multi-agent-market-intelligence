@@ -224,35 +224,95 @@
         "retrieved_at": "2026-10-21T10:00:00+00:00"
       }
     ],
-    "competitor": {
-      "company": "Acme Health AI",
-      "positioning": "Enterprise clinical documentation copilot for NHS trusts, sold as a per-seat SaaS with an implementation package.",
-      "products": [
-        "Acme Scribe",
-        "Acme Triage Assist"
-      ],
-      "pricing_model": "Per-seat SaaS plus implementation fee",
-      "funding_stage": "Series B (£40m)",
-      "strengths": [
-        "Clinician-in-the-loop workflow reduces adoption risk",
-        "Existing NHS trust references from the triage pilot",
-        "Clinical safety team funded by the new round"
-      ],
-      "weaknesses": [
-        "Limited footprint outside the UK",
-        "New regulatory code adds validation overhead",
-        "Per-seat pricing is exposed to trust budget cycles"
-      ],
-      "sources": [
-        "https://acme-health.example.com/about"
-      ],
-      "retrieved_sources": [
-        {
-          "url": "https://acme-health.example.com/about",
-          "retrieved_at": "2026-10-21T10:00:00+00:00",
-          "content_hash": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+    "comparison": {
+      "subject": {
+        "name": "Acme Health AI",
+        "pages": [
+          {
+            "source_id": "S1",
+            "url": "https://acme-health.example.com/product",
+            "retrieved_at": "2026-10-21T10:00:00+00:00",
+            "content_hash": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+          },
+          {
+            "source_id": "S2",
+            "url": "https://acme-health.example.com/pricing",
+            "retrieved_at": "2026-10-21T10:00:00+00:00",
+            "content_hash": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+          }
+        ],
+        "product_focus": {
+          "value": "Clinical documentation copilot for NHS trusts.",
+          "evidence": [
+            {
+              "source_id": "S1",
+              "quote": "clinical documentation copilot for NHS trusts"
+            }
+          ]
+        },
+        "pricing_model": {
+          "value": "Per-seat SaaS plus implementation fee.",
+          "evidence": [
+            {
+              "source_id": "S2",
+              "quote": "per-seat SaaS plus an implementation fee"
+            }
+          ]
+        },
+        "positioning": {
+          "value": "Enterprise clinical workflow vendor focused on UK trusts.",
+          "evidence": [
+            {
+              "source_id": "S1",
+              "quote": "built for enterprise clinical workflows in UK trusts"
+            }
+          ]
         }
-      ]
+      },
+      "competitor": {
+        "name": "Contoso Health",
+        "pages": [
+          {
+            "source_id": "S1",
+            "url": "https://contoso-health.example.com/product",
+            "retrieved_at": "2026-10-21T10:00:00+00:00",
+            "content_hash": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+          },
+          {
+            "source_id": "S2",
+            "url": "https://contoso-health.example.com/pricing",
+            "retrieved_at": "2026-10-21T10:00:00+00:00",
+            "content_hash": "1111111111111111111111111111111111111111111111111111111111111111"
+          }
+        ],
+        "product_focus": {
+          "value": "AI triage assistant for emergency departments.",
+          "evidence": [
+            {
+              "source_id": "S1",
+              "quote": "AI triage assistant for emergency departments"
+            }
+          ]
+        },
+        "pricing_model": {
+          "value": "Annual enterprise licence.",
+          "evidence": [
+            {
+              "source_id": "S2",
+              "quote": "annual enterprise licence"
+            }
+          ]
+        },
+        "positioning": {
+          "value": "Global hospital group focused on emergency care.",
+          "evidence": [
+            {
+              "source_id": "S1",
+              "quote": "global hospital group focused on emergency care"
+            }
+          ]
+        }
+      }
     }
   }
 }

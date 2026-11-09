@@ -2,10 +2,13 @@
 import pytest
 
 from market_intelligence.agents.schemas import (
-    CompetitorProfile,
-    CompetitorSource,
+    CompanyComparison,
+    Comparison,
+    ComparisonEvidence,
+    ComparisonField,
     NewsSummary,
     NewsTone,
+    PageSource,
     ToneAspect,
     TopicEvidence,
     TopicReport,
@@ -19,9 +22,9 @@ PUBLISHED_AT = "2026-10-20T10:00:00+00:00"
 class FakeStructuredLLM:
     """Fake LLM that returns a fixed Pydantic instance per output schema.
 
-    Pass ``responses`` as a mapping of schema class -> instance. Each
-    ``with_structured_output(schema)`` call records the prompt and returns the
-    matching instance, so the whole suite runs offline with no API key.
+    Pass ``responses`` as a mapping of schema class -> instance. A schema may
+    also map to a list of instances; each ``invoke`` then returns the next one,
+    which lets the two per-side comparison calls receive different drafts.
     """
 
     def __init__(self, responses: dict | None = None):
@@ -34,11 +37,16 @@ class FakeStructuredLLM:
 
 class _SchemaRunnable:
     def __init__(self, response, calls):
+        # Share the list so repeated with_structured_output() calls consume the
+        # queue in order (the two per-side comparison calls need this).
+        self._queue = response if isinstance(response, list) else None
         self._response = response
         self._calls = calls
 
     def invoke(self, prompt, **kwargs):
         self._calls.append(prompt)
+        if self._queue is not None:
+            return self._queue.pop(0)
         return self._response
 
 
@@ -101,31 +109,70 @@ def build_sample_state(*, approved: bool | None = True, summary: str = "s1"):
         window_end=PUBLISHED_AT,
         source_count=1,
     )
-    competitor = CompetitorProfile(
-        company="Acme",
-        positioning="leader",
-        products=["widget"],
-        pricing_model="subscription",
-        funding_stage="seed",
-        strengths=["strong brand"],
-        weaknesses=["small team"],
-        sources=["https://acme.com"],
-        retrieved_sources=[
-            CompetitorSource(
-                url="https://acme.com",
-                retrieved_at="2026-10-21T12:05:00+00:00",
-                content_hash="b" * 64,
-            )
-        ],
+    comparison = Comparison(
+        subject=CompanyComparison(
+            name="Acme",
+            pages=[
+                PageSource(
+                    source_id="S1",
+                    url="https://acme.com",
+                    retrieved_at="2026-10-21T12:05:00+00:00",
+                    content_hash="b" * 64,
+                )
+            ],
+            product_focus=ComparisonField(
+                value="widget",
+                evidence=[
+                    ComparisonEvidence(source_id="S1", quote="widget")
+                ],
+            ),
+            pricing_model=ComparisonField(
+                value="subscription",
+                evidence=[
+                    ComparisonEvidence(source_id="S1", quote="subscription")
+                ],
+            ),
+            positioning=ComparisonField(
+                value="leader",
+                evidence=[ComparisonEvidence(source_id="S1", quote="leader")],
+            ),
+        ),
+        competitor=CompanyComparison(
+            name="Rival",
+            pages=[
+                PageSource(
+                    source_id="S1",
+                    url="https://rival.com",
+                    retrieved_at="2026-10-21T12:05:00+00:00",
+                    content_hash="c" * 64,
+                )
+            ],
+            product_focus=ComparisonField(
+                value="widget",
+                evidence=[
+                    ComparisonEvidence(source_id="S1", quote="widget")
+                ],
+            ),
+            pricing_model=ComparisonField(),
+            positioning=ComparisonField(
+                value="challenger",
+                evidence=[
+                    ComparisonEvidence(source_id="S1", quote="challenger")
+                ],
+            ),
+        ),
     )
     return MarketIntelligenceState(
         rss_url="https://example.com/feed.xml",
-        competitor_url="https://acme.com",
+        subject_name="Acme",
+        subject_pages=["https://acme.com"],
+        competitor_name="Rival",
+        competitor_pages=["https://rival.com"],
         num_articles=1,
         summaries=[article],
         topics=[topic],
         tones=[tone],
-        competitor=competitor,
+        comparison=comparison,
         warnings=["one warning"],
         approved=approved,
     )

@@ -5,7 +5,7 @@ from typing import Any
 from langchain_core.runnables import RunnableConfig
 from langgraph.types import interrupt
 
-from market_intelligence.agents.competitor import fetch_and_analyze
+from market_intelligence.agents.comparison import build_comparison
 from market_intelligence.agents.news import ingest_news
 from market_intelligence.agents.tone import analyze_news_tone
 from market_intelligence.agents.topics import identify_topics
@@ -81,9 +81,17 @@ def analyze_news_tone_node(state: MarketIntelligenceState, llm=None) -> dict[str
 
 
 def research_competitor_node(state: MarketIntelligenceState, llm=None) -> dict[str, Any]:
-    """Scrape the competitor page and extract a structured profile."""
+    """Fetch the named subject/competitor pages and build the comparison."""
+    comparison, comparison_warnings = build_comparison(
+        state.subject_name,
+        state.subject_pages,
+        state.competitor_name,
+        state.competitor_pages,
+        llm=llm,
+    )
     return {
-        "competitor": fetch_and_analyze(state.competitor_url, llm=llm),
+        "comparison": comparison,
+        "warnings": state.warnings + comparison_warnings,
         "status": "awaiting_approval",
     }
 

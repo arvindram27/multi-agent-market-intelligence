@@ -15,6 +15,11 @@ ALLOWED_MSGPACK_MODULES = [
         "TopicReport",
         "NewsTone",
         "CompetitorProfile",
+        "Comparison",
+        "CompanyComparison",
+        "ComparisonField",
+        "ComparisonEvidence",
+        "PageSource",
     )
 ]
 

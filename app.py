@@ -19,7 +19,6 @@ from ui.session import DEMO_MODE, init_session, load_fixture
 from market_intelligence.persistence import persistence_configured
 
 DEFAULT_RSS = "https://feeds.bbci.co.uk/news/business/rss.xml"
-DEFAULT_COMPETITOR = "https://www.google.com/about/"
 
 st.set_page_config(
     page_title="Market Intelligence",
@@ -44,7 +43,28 @@ with st.sidebar:
                 icon="⚠️",
             )
         rss_url = st.text_input("RSS feed", DEFAULT_RSS)
-        competitor_url = st.text_input("Competitor page", DEFAULT_COMPETITOR)
+        subject_name = st.text_input(
+            "Subject name", "", placeholder="Your company"
+        )
+        subject_page = st.text_input(
+            "Subject page", "", placeholder="https://example.com/product"
+        )
+        subject_page_2 = st.text_input(
+            "Subject page 2 (optional)",
+            "",
+            placeholder="https://example.com/pricing",
+        )
+        competitor_name = st.text_input(
+            "Competitor name", "", placeholder="Competitor"
+        )
+        competitor_page = st.text_input(
+            "Competitor page", "", placeholder="https://competitor.example/product"
+        )
+        competitor_page_2 = st.text_input(
+            "Competitor page 2 (optional)",
+            "",
+            placeholder="https://competitor.example/pricing",
+        )
         num_articles = st.slider("Articles to analyze", 1, 5, 3)
         run = st.button("Run analysis", type="primary", width="stretch")
         if st.button("Reset", width="stretch"):
@@ -63,8 +83,8 @@ with st.sidebar:
 
 st.title("Market Intelligence")
 st.caption(
-    "News excerpts → topics + news tone → competitor profile → human approval, "
-    "orchestrated by a checkpointed LangGraph workflow."
+    "News excerpts → topics + news tone → subject-vs-competitor comparison → "
+    "human approval, orchestrated by a checkpointed LangGraph workflow."
 )
 
 if DEMO_MODE:
@@ -75,19 +95,44 @@ if DEMO_MODE:
         icon="🧪",
     )
 elif run:
-    st.session_state.thread_id = uuid.uuid4().hex
-    try:
-        st.session_state.state = render.run_and_stream(
-            graph,
-            {"configurable": {"thread_id": st.session_state.thread_id}},
-            {
-                "rss_url": rss_url,
-                "competitor_url": competitor_url,
-                "num_articles": num_articles,
-            },
-        )
-    except Exception as exc:  # surface a friendly message instead of a stack trace
-        st.error(f"Run failed: {exc}")
+    subject_pages = [
+        page.strip() for page in (subject_page, subject_page_2) if page.strip()
+    ]
+    competitor_pages = [
+        page.strip()
+        for page in (competitor_page, competitor_page_2)
+        if page.strip()
+    ]
+    validation_error = None
+    if not rss_url.strip():
+        validation_error = "RSS feed is required."
+    elif not subject_name.strip() or not competitor_name.strip():
+        validation_error = "Subject and competitor names are required."
+    elif not subject_pages or not competitor_pages:
+        validation_error = "Subject and competitor each need at least one page."
+    elif len(set(subject_pages)) != len(subject_pages):
+        validation_error = "Subject page URLs must be unique."
+    elif len(set(competitor_pages)) != len(competitor_pages):
+        validation_error = "Competitor page URLs must be unique."
+    if validation_error:
+        st.error(validation_error)
+    else:
+        st.session_state.thread_id = uuid.uuid4().hex
+        try:
+            st.session_state.state = render.run_and_stream(
+                graph,
+                {"configurable": {"thread_id": st.session_state.thread_id}},
+                {
+                    "rss_url": rss_url,
+                    "subject_name": subject_name,
+                    "subject_pages": subject_pages,
+                    "competitor_name": competitor_name,
+                    "competitor_pages": competitor_pages,
+                    "num_articles": num_articles,
+                },
+            )
+        except Exception as exc:  # surface a friendly message instead of a stack trace
+            st.error(f"Run failed: {exc}")
 
 state = st.session_state.get("state")
 

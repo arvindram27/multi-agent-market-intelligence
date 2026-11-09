@@ -3,13 +3,21 @@ import pytest
 from pydantic import ValidationError
 
 from market_intelligence.agents.schemas import (
+    CompanyComparison,
+    ComparedFieldDraft,
+    Comparison,
+    ComparisonEvidence,
+    ComparisonField,
     CompetitorProfile,
     CompetitorProfileDraft,
     CompetitorSource,
+    EvidenceCitationDraft,
     NewsDigest,
     NewsSummary,
     NewsTone,
     NewsToneDraft,
+    PageSource,
+    SideComparisonDraft,
     ToneAspect,
     TopicAnalysis,
     TopicEvidence,
@@ -141,6 +149,47 @@ def test_topic_analysis_container():
     assert len(analysis.topics) == 1
 
 
+def _comparison_side(name="Acme", url="https://acme.example"):
+    return CompanyComparison(
+        name=name,
+        pages=[
+            PageSource(
+                source_id="S1",
+                url=url,
+                retrieved_at="2026-10-21T09:00:00+00:00",
+                content_hash="b" * 64,
+            )
+        ],
+        product_focus=ComparisonField(
+            value="widgets",
+            evidence=[ComparisonEvidence(source_id="S1", quote="widgets")],
+        ),
+        pricing_model=ComparisonField(),
+        positioning=ComparisonField(),
+    )
+
+
+def test_comparison_container_round_trips():
+    comparison = Comparison(
+        subject=_comparison_side("Acme"),
+        competitor=_comparison_side("Rival", "https://rival.example"),
+    )
+    assert comparison.subject.pages[0].source_id == "S1"
+    assert comparison.competitor.pages[0].url == "https://rival.example"
+
+
+def test_comparison_draft_limits():
+    with pytest.raises(ValidationError):
+        ComparedFieldDraft(value="x" * 161)
+    with pytest.raises(ValidationError):
+        EvidenceCitationDraft(source_id="S1", quote="x" * 161)
+    with pytest.raises(ValidationError):
+        EvidenceCitationDraft(source_id="S3", quote="x")
+    citation = EvidenceCitationDraft(source_id="S1", quote="x")
+    with pytest.raises(ValidationError):
+        ComparedFieldDraft(value="x", evidence=[citation, citation])
+
+
 def _assert_openai_strict_objects(node, path="schema"):
     """OpenAI strict structured output rejects bare objects and additionalProperties: true."""
     if isinstance(node, dict):
@@ -164,6 +213,9 @@ def _assert_openai_strict_objects(node, path="schema"):
         TopicAnalysis,
         NewsToneDraft,
         CompetitorProfileDraft,
+        EvidenceCitationDraft,
+        ComparedFieldDraft,
+        SideComparisonDraft,
     ],
 )
 def test_llm_schemas_are_openai_strict_compatible(model):

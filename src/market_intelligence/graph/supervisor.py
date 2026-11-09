@@ -104,7 +104,6 @@ def build_graph(
     graph.add_node(
         "research_competitor",
         partial(research_competitor_node, llm=llm),
-        retry_policy=RETRY_POLICY,
     )
     graph.add_node("review_profile", review_profile_node)
     graph.add_node(

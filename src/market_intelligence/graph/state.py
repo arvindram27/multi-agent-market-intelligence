@@ -8,6 +8,7 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 from market_intelligence.agents.schemas import (
+    Comparison,
     CompetitorProfile,
     NewsSummary,
     NewsTone,
@@ -21,7 +22,12 @@ class MarketIntelligenceState(BaseModel):
 
     # Inputs
     rss_url: str
-    competitor_url: str
+    subject_name: str = ""
+    subject_pages: list[str] = Field(default_factory=list)
+    competitor_name: str = ""
+    competitor_pages: list[str] = Field(default_factory=list)
+    # Retained for old checkpoints and the legacy runs.competitor_url column.
+    competitor_url: str = ""
     num_articles: int = Field(
         default=settings.num_articles, ge=1, le=settings.max_articles
     )
@@ -30,6 +36,7 @@ class MarketIntelligenceState(BaseModel):
     summaries: list[NewsSummary] = Field(default_factory=list)
     topics: list[TopicReport] = Field(default_factory=list)
     tones: list[NewsTone] = Field(default_factory=list)
+    comparison: Comparison | None = None
     competitor: CompetitorProfile | None = None
     warnings: list[str] = Field(default_factory=list)
 

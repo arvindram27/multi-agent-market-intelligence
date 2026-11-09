@@ -9,6 +9,7 @@ import pytest
 from pydantic import SecretStr
 
 from market_intelligence.config import settings
+from market_intelligence.agents.schemas import ComparisonEvidence, ComparisonField
 from market_intelligence.graph.nodes import persist_node
 from market_intelligence.persistence import (
     CommitOutcomeUnknown,
@@ -21,6 +22,7 @@ from market_intelligence.persistence import (
     sanitize_for_output,
 )
 from market_intelligence.persistence_postgres import (
+    CANONICAL_HASH_PREFIX,
     PostgresProfileWriter,
     business_payload,
     canonical_json,
@@ -91,6 +93,61 @@ def test_canonical_hash_is_stable_and_content_sensitive(sample_state):
     first.error = "irrelevant"
     assert digest(first) == digest(same)
     assert "status" not in business_payload(first)
+
+
+def test_payload_carries_comparison_evidence_and_pages(sample_state):
+    payload = business_payload(sample_state())
+    assert "competitor" not in payload
+    comparison = payload["comparison"]
+    assert comparison["subject"]["name"] == "Acme"
+    assert comparison["competitor"]["name"] == "Rival"
+    page = comparison["subject"]["pages"][0]
+    assert page["source_id"] == "S1"
+    assert len(page["content_hash"]) == 64
+    field = comparison["subject"]["product_focus"]
+    assert field["value"] == "widget"
+    assert field["evidence"] == [{"source_id": "S1", "quote": "widget"}]
+
+
+def test_snapshot_lineage_v2_is_distinct_from_v1(sample_state):
+    assert CANONICAL_HASH_PREFIX == "mi-run-v2\n"
+    canonical = canonical_json(business_payload(sample_state()))
+    v1 = content_hash("mi-run-v1\n" + canonical)
+    v2 = content_hash(CANONICAL_HASH_PREFIX + canonical)
+    assert v1 != v2
+
+
+def test_writer_refuses_orphan_comparison_evidence(sample_state):
+    state = sample_state()
+    state.comparison.subject.product_focus = ComparisonField(
+        value=None,
+        evidence=[ComparisonEvidence(source_id="S1", quote="widget")],
+    )
+
+    def forbidden_factory():
+        raise AssertionError("connected before checking comparison invariants")
+
+    writer = PostgresProfileWriter(
+        "postgresql://market_intel:fake@127.0.0.1:1/db",  # pragma: allowlist secret
+        connection_factory=forbidden_factory,
+    )
+    with pytest.raises(PersistenceError, match="comparison invariant"):
+        writer.persist("run-1", state)
+
+
+def test_writer_refuses_unknown_comparison_source(sample_state):
+    state = sample_state()
+    state.comparison.subject.product_focus.evidence[0].source_id = "S9"
+
+    def forbidden_factory():
+        raise AssertionError("connected before checking comparison invariants")
+
+    writer = PostgresProfileWriter(
+        "postgresql://market_intel:fake@127.0.0.1:1/db",  # pragma: allowlist secret
+        connection_factory=forbidden_factory,
+    )
+    with pytest.raises(PersistenceError, match="comparison invariant"):
+        writer.persist("run-1", state)
 
 
 def test_redaction_removes_fake_credentials():

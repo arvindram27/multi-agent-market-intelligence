@@ -9,6 +9,7 @@ import streamlit as st
 from langgraph.checkpoint.sqlite import SqliteSaver
 
 from market_intelligence.agents.schemas import (
+    Comparison,
     CompetitorProfile,
     NewsSummary,
     NewsTone,
@@ -49,7 +50,16 @@ def load_fixture(path: Path = FIXTURE_PATH) -> dict:
         "summaries": [NewsSummary(**item) for item in state["summaries"]],
         "topics": [TopicReport(**item) for item in state["topics"]],
         "tones": [NewsTone(**item) for item in state["tones"]],
-        "competitor": CompetitorProfile(**state["competitor"]),
+        "comparison": (
+            Comparison(**state["comparison"])
+            if state.get("comparison")
+            else None
+        ),
+        "competitor": (
+            CompetitorProfile(**state["competitor"])
+            if state.get("competitor")
+            else None
+        ),
         "status": state.get("status", "awaiting_approval"),
         "approved": state.get("approved"),
         "warnings": state.get("warnings", []),

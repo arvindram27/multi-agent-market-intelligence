@@ -22,8 +22,13 @@ def _describe(node: str, data: dict) -> str:
     if node == "analyze_news_tone":
         return f"{len(data.get('tones', []))} tone results"
     if node == "research_competitor":
-        profile = data.get("competitor")
-        return f"profile built for {profile.company}" if profile else "profile built"
+        comparison = data.get("comparison")
+        if comparison:
+            return (
+                f"comparison built for {comparison.subject.name} vs "
+                f"{comparison.competitor.name}"
+            )
+        return "comparison built"
     if node == "persist":
         if data.get("persisted_run_id"):
             return "saved"
@@ -38,6 +43,7 @@ def view_from_snapshot(snapshot) -> dict:
         "summaries": values.get("summaries", []),
         "topics": values.get("topics", []),
         "tones": values.get("tones", []),
+        "comparison": values.get("comparison"),
         "competitor": values.get("competitor"),
         "status": values.get("status", "running"),
         "approved": values.get("approved"),
@@ -85,7 +91,9 @@ def render_tabs(tabs, state: dict, on_decision) -> None:
         tone.render(state.get("tones", []))
     with tabs[3]:
         competitors.render(
+            state.get("comparison"),
             state.get("competitor"),
             pending=state.get("pending", False),
             on_decision=on_decision,
+            warnings=state.get("warnings", []),
         )
