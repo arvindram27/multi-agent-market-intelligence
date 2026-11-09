@@ -1,8 +1,34 @@
-# Multi-Agent AI Ecosystem for Market Intelligence
+<p align="center">
+  <img src="hero_image_symbiotic_intelligence.png" alt="Symbiotic intelligence - multi-agent market intelligence" width="640" />
+</p>
+
+<h1 align="center">Multi-Agent AI Ecosystem for Market Intelligence</h1>
+
+<p align="center">
+  <strong>RSS news excerpts in, structured summaries and analysis out: typed LLM agents on a checkpointed LangGraph workflow, with Postgres persistence and a human approval gate.</strong>
+</p>
+
+<p align="center">
+  <a href="https://github.com/arvindram27/multi-agent-market-intelligence/actions/workflows/ci.yml"><img src="https://github.com/arvindram27/multi-agent-market-intelligence/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
+  <a href="./LICENSE"><img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="License: MIT" /></a>
+  <img src="https://img.shields.io/badge/python-%3E%3D3.11-blue" alt="Python &gt;= 3.11" />
+</p>
+
+<p align="center">
+  <a href="#-streamlit-demo">Demo</a> ·
+  <a href="#-quick-start">Quick start</a> ·
+  <a href="#-architecture-overview">Architecture</a> ·
+  <a href="./PRODUCTION_PLAN.md">Production plan</a>
+</p>
+
+<p align="center">
+  <img src="docs/screenshots/01-news.png" alt="Streamlit demo - news summaries with source provenance" width="860" /><br/>
+  <em>Fixture-mode demo snapshot - not a live run.</em>
+</p>
 
 A comprehensive multi-agent system designed to automate market intelligence gathering, processing, and analysis. This project implements specialized AI agents that work together to provide insights from RSS news excerpts, competitor pages, extracted topics, and model-assessed news tone.
 
-> 📄 **Production roadmap:** see [`PRODUCTION_PLAN.md`](./PRODUCTION_PLAN.md) for the full migration plan (LangGraph · LangChain · Oracle 23ai · LangSmith · Grafana · RAGAS).
+> 📄 **Production roadmap:** see [`PRODUCTION_PLAN.md`](./PRODUCTION_PLAN.md) for the target architecture, and the deferred directions under evaluation (Oracle 23ai, LangSmith, Grafana Cloud, RAGAS - not built features).
 
 ## 🚀 Features
 
@@ -14,42 +40,66 @@ A comprehensive multi-agent system designed to automate market intelligence gath
 
 ### Orchestration
 - **LangGraph workflow**: typed state, checkpointing, retries, and a human-in-the-loop approval gate
-- **Legacy orchestrator**: the original sequential MVP pipeline, kept as a runnable baseline
+- **Legacy orchestrator**: the original sequential MVP pipeline, retained as a baseline
 
 ## 📁 Project Structure
 
 ```
-├── agents/
-│   ├── news_summarization_agent/
-│   │   └── news_agent_mvp.py          # News monitoring and summarization
-│   ├── competitor_analysis_agent/
-│   │   └── competitor_agent_mvp.py    # Competitor tracking and analysis
-│   ├── trend_identification_agent/
-│   │   └── trend_agent_mvp.py         # Trend detection and analysis
-│   └── consumer_sentiment_analysis_agent/
-│       └── sentiment_agent_mvp.py     # Sentiment analysis engine
-├── orchestration/
-│   └── main_orchestrator_mvp.py       # Main coordination system
-├── src/market_intelligence/           # LLM agents + LangGraph workflow
-│   ├── agents/                        # news, topics, tone, competitor
-│   └── graph/                         # state, nodes, supervisor, serde
-├── data/                              # Runtime output / cache
-├── PRODUCTION_PLAN.md                 # Production-grade migration roadmap
-├── page.tsx                           # Web UI component
-├── documentation/
-│   ├── AI Agent Ecosystem Architecture for Market Intelligence.md
-│   ├── AI Agent Ecosystem_ Components and Roles.md
-│   └── Critical Analysis of the AI Agent Ecosystem for Market Intelligence.md
-├── assets/
-│   ├── hero_image_symbiotic_intelligence.png
-│   └── icon_*.png                     # Agent icons
-└── README.md
+├── agents/                             # legacy deterministic MVP (retained baseline)
+│   ├── news_summarization_agent/       # legacy news agent
+│   ├── competitor_analysis_agent/      # legacy competitor agent
+│   ├── trend_identification_agent/     # legacy trend agent
+│   └── consumer_sentiment_analysis_agent/  # legacy sentiment agent
+├── orchestration/                      # legacy deterministic MVP orchestration (retained)
+│   └── main_orchestrator_mvp.py
+├── src/market_intelligence/            # LLM agents, LangGraph graph, stores and analysis
+│   ├── agents/                         # news, topics, tone, competitor
+│   ├── graph/                          # state, nodes, supervisor, serde
+│   ├── db/                             # schema DDL, verification, ingestion/analysis facades
+│   ├── ingestion/                      # feed collector, sweep store, CLI
+│   ├── analysis/                       # read-only SQL analysis report and CLI
+│   ├── persistence.py                  # approved-run persistence contract
+│   └── persistence_postgres.py         # Postgres writer for approved runs
+├── tests/                              # offline suite and Postgres integration tests
+├── app.py                              # Streamlit demo entry point
+├── ui/                                 # Streamlit demo components
+├── scripts/                            # database and ingestion init scripts
+├── .github/workflows/ci.yml            # CI: offline matrix, Postgres integration, secret scan
+├── .streamlit/                         # Streamlit configuration
+├── docs/                               # demo screenshots
+├── data/                               # local runtime data
+├── AI Agent Ecosystem Architecture for Market Intelligence.md
+├── AI Agent Ecosystem_ Components and Roles.md
+├── Critical Analysis of the AI Agent Ecosystem for Market Intelligence.md
+├── website_concept_symbiotic_intelligence.md
+├── website_content_symbiotic_intelligence.md
+├── hero_image_symbiotic_intelligence.png
+├── icon_competitor_agent.png
+├── icon_news_agent.png
+├── icon_sentiment_agent.png
+├── icon_trend_agent.png
+├── page.tsx                            # archived early artifact (retained, unreferenced)
+├── pasted_content.txt                  # archived early artifact (retained, unreferenced)
+├── market_intelligence_ecosystem_mvp.zip  # archived early artifact (retained, unreferenced)
+├── LICENSE
+├── PRODUCTION_PLAN.md
+├── README.md
+├── todo.md
+├── pyproject.toml
+├── requirements.txt
+├── docker-compose.yml
+├── ingestion_sources.toml
+├── .env.example
+├── .gitignore
+├── .pre-commit-config.yaml
+└── .secrets.baseline
 ```
 
 > **Legacy vs. LLM:** the `agents/` and `orchestration/` directories at the repo root are the
-> **legacy deterministic MVP** (runnable baseline). The **LLM-backed agents** live in
-> `src/market_intelligence/agents/` (imported as `market_intelligence.agents.*`). The legacy
-> tree will be removed in a later phase of `PRODUCTION_PLAN.md`.
+> **legacy deterministic MVP** (retained baseline). The **LLM-backed
+> agents** live in `src/market_intelligence/agents/` (imported as
+> `market_intelligence.agents.*`). The legacy tree is retained as the documented baseline;
+> no removal is planned.
 
 ## 🛠️ Current Implementation Status
 
@@ -587,6 +637,10 @@ This project is designed as a comprehensive market intelligence solution. Future
 
 For questions about implementation or extending this system, refer to the comprehensive documentation provided in the project.
 
+## License
+
+Released under the [MIT License](./LICENSE). Copyright (c) 2026 arvindram27.
+
 ---
 
-**Status**: MVP Implementation Complete | **Next Phase**: LLM Integration & Production Readiness (see `PRODUCTION_PLAN.md`)
+**Status**: LangGraph pipeline with typed LLM agents, Postgres persistence, a local RSS ingestion store, a read-only SQL analysis layer, CI on every push, and the Streamlit demo in fixture mode.

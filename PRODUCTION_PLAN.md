@@ -7,7 +7,9 @@
 > **Status note (2026-10-22):** the shipped path already uses LangGraph, typed LLM
 > agents, bounded ingestion, source provenance, and a human approval gate. The original
 > deterministic MVP remains under `agents/` as a legacy baseline. Sections below describe
-> the target architecture; planned items are not claims that they are built.
+> the target architecture; planned items are not claims that they are built. Oracle 23ai,
+> LangSmith, Grafana Cloud and RAGAS are deferred directions under evaluation - not built
+> features and not committed plans.
 
 ---
 
