@@ -110,16 +110,18 @@ A comprehensive multi-agent system designed to automate market intelligence gath
 - Rule-based sentiment classification
 - Sequential agent orchestration
 
-### Production Features (🚧 In progress — see `PRODUCTION_PLAN.md`)
-- ✅ **LLM agents** via LangChain (`init_chat_model` → OpenAI) with typed Pydantic structured output
-- ✅ **LangGraph** orchestration with checkpointing, retries, and human-in-the-loop
-- ✅ **Postgres persistence for approved runs** (local Docker): one transaction per
-  snapshot with provenance, keyed by run id and content hash so retries are idempotent
-- 🚧 **Oracle Autonomous Database 23ai** adapter + AI Vector Search (RAG) for the production
-  data layer
-- 🚧 **Observability** via LangSmith + OpenTelemetry → Grafana Cloud
-- 🚧 **Evaluation** via RAGAS + LangSmith datasets (offline + online)
-- ✅ **Streamlit demo UI** with live agent streaming
+### Production Features
+
+**Implemented:**
+- ✅ **LLM agents** with typed Pydantic output (LangChain `init_chat_model` → OpenAI)
+- ✅ **LangGraph** orchestration: checkpointing, retries, human approval in the loop
+- ✅ **Postgres persistence for approved runs** (local Docker): one transaction per snapshot with provenance; retries stay idempotent via run id and content hash
+- ✅ **Streamlit demo UI**: live mode streams agent progress; fixture mode runs saved demo data, no API key needed
+
+**Deferred ideas, not started or committed (see `PRODUCTION_PLAN.md`):**
+- Oracle Autonomous Database 23ai adapter + AI Vector Search (RAG) for the production data layer
+- Observability via LangSmith + OpenTelemetry → Grafana Cloud
+- Evaluation via RAGAS + LangSmith datasets (offline + online)
 
 ## 🚀 Quick Start
 
@@ -186,7 +188,7 @@ of being coerced. `SqliteSaver` (from `langgraph.checkpoint.sqlite`) keeps check
 processes.
 
 > Approval gates **business persistence/export**, not checkpoint storage: the checkpoint
-> already holds the pending profile. The writer is selected from configuration — Postgres
+> already holds the pending profile. The writer is selected from configuration: Postgres
 > when `DATABASE_URL` is set, otherwise one that fails loudly at persist time. There is no
 > implicit no-op writer; `NullProfileWriter` is only for tests and the fixture demo.
 
@@ -221,7 +223,7 @@ citations carry an article foreign key. Tone scores and model confidence use
 
 **Identity and dedup.** `content_hash = sha256("mi-run-v1\n" + canonical JSON)`, where the
 canonical JSON is sorted, whitespace-free and contains only business content (inputs,
-summaries, topics, tones, competitor, warnings) — never status/error bookkeeping.
+summaries, topics, tones, competitor, warnings), never status/error bookkeeping.
 `UNIQUE (run_id, content_hash)` makes re-persisting the **unchanged** snapshot a no-op and
 leaves changed content as a second, visible version. A retry never regenerates timestamps,
 provenance or the hash: it reuses the frozen snapshot, so it is identical only if no business
@@ -253,7 +255,7 @@ enforced. Every `NewsTone` is a model assessment of a captured summary, so `run_
 references `run_articles`. Unresolved citations are still stored (`verified = false`,
 `matched_article_id = NULL`) rather than dropped. A state built outside the graph must uphold
 the same invariants: the writer validates them before connecting and fails closed, and the
-foreign keys remain enforced — constraints are never relaxed to make a write succeed.
+foreign keys remain enforced: constraints are never relaxed to make a write succeed.
 
 **Limitations.** This is initial setup for one local developer machine: no migration tool,
 no retention/expiry policy, no row-level access control, and `latest_runs` is insertion
@@ -489,7 +491,7 @@ All RSS and competitor fetches go through one bounded client (`src/market_intell
   driver message cannot carry credentials outward. The Compose service has no fallback
   password and refuses to start until `POSTGRES_PASSWORD` is set.
 - **Rotate immediately** if a key is ever pasted into chat, a log, or a ticket. Revoke it in
-  the provider console and issue a new one — deleting the file does not undo the exposure.
+  the provider console and issue a new one. Deleting the file does not undo the exposure.
 - **Pre-commit guard:** after `pip install -e ".[dev]"`, run `pre-commit install` once.
   `detect-secrets` (against `.secrets.baseline`) and `detect-private-key` then block staged
   credentials. Run manually with `pre-commit run --all-files`.
@@ -537,7 +539,7 @@ Screenshots and reviews use a committed snapshot so captures are deterministic a
 $env:DEMO_MODE=1; streamlit run app.py
 ```
 
-The app labels it as **fixture data captured 2026-10-21 — not a live run**.
+The app labels it as **fixture data captured 2026-10-21, not a live run**.
 
 ### Screenshots (1920×1080)
 
@@ -584,26 +586,29 @@ The app labels it as **fixture data captured 2026-10-21 — not a live run**.
 - requests + BeautifulSoup (web scraping)
 - collections.Counter (basic analytics)
 
-**Planned Production Stack:**
-- LangGraph (stateful orchestration) + LangChain (typed agents & tools)
-- OpenAI models (`init_chat_model` provider-agnostic)
-- Oracle Autonomous Database 23ai — AI Vector Search (HNSW/IVF) via `langchain-oracledb`
-- LangSmith (tracing, evals, prompts) + OpenTelemetry → Grafana Cloud (Tempo/Loki/Prometheus)
+**Current stack additions (implemented):**
+- LangGraph orchestration + LangChain typed agents
+- OpenAI models via `init_chat_model` (provider-agnostic)
+- Streamlit demo UI
+
+**Deferred stack ideas (not started or committed):**
+- Oracle Autonomous Database 23ai: AI Vector Search (HNSW/IVF) via `langchain-oracledb`
+- LangSmith (tracing, evals, prompts) + OpenTelemetry → Grafana Cloud
 - RAGAS (faithfulness, answer relevancy, context precision/recall)
-- FastAPI (serving) + Streamlit (demo UI)
+- FastAPI serving
 
 ## 📈 Roadmap
 
 | Phase | Scope |
 |---|---|
-| 0 — Foundation | Packaging (`pyproject.toml` + `uv`), config, `structlog`, CI, tests |
-| 1 — LLM-ify agents | Typed OpenAI agents + tools (`with_structured_output`) |
-| 2 — Orchestration | LangGraph supervisor graph + checkpointing + HITL |
-| 2.5 — Streamlit demo | Vertical slice: stream all agents into tabs + approve button |
-| 3 — Data | Oracle 23ai schema, embeddings, vector search/RAG |
-| 4 — Observability | LangSmith + OTel → Grafana Cloud |
-| 5 — Evals | RAGAS + LangSmith datasets, CI gating |
-| 6 — Serving & hardening | FastAPI, background jobs, Docker/K8s/OCI, security |
+| 0 - Foundation | Packaging (`pyproject.toml` + `uv`), config, `structlog`, CI, tests |
+| 1 - LLM-ify agents | Typed OpenAI agents + tools (`with_structured_output`) |
+| 2 - Orchestration | LangGraph supervisor graph + checkpointing + HITL |
+| 2.5 - Streamlit demo | Vertical slice: stream all agents into tabs + approve button |
+| 3 - Data | Oracle 23ai schema, embeddings, vector search/RAG |
+| 4 - Observability | LangSmith + OTel → Grafana Cloud |
+| 5 - Evals | RAGAS + LangSmith datasets, CI gating |
+| 6 - Serving & hardening | FastAPI, background jobs, Docker/K8s/OCI, security |
 
 See `PRODUCTION_PLAN.md` for full detail and exit criteria.
 
@@ -626,7 +631,7 @@ This project is designed as a comprehensive market intelligence solution. Future
 
 ## 🔐 Security & Privacy
 
-- API keys live in `.env` locally and in a managed secret store when deployed — see
+- API keys live in `.env` locally and in a managed secret store when deployed. See
   [Secrets](#-secrets).
 - Pre-commit hooks (`detect-secrets`, `detect-private-key`) block accidental commits.
 - Follow data privacy regulations (GDPR, CCPA)
