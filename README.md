@@ -280,6 +280,74 @@ sweep_id | status | finished_at | attempted | succeeded | failed | seen | stored
 ...
 ```
 
+`--dataset` selects which store(s) one report reads. `ingestion` remains the
+default and never probes the pipeline objects, so existing invocations keep
+identical output and exit codes:
+
+```bash
+python -m market_intelligence.analysis --dataset pipeline
+python -m market_intelligence.analysis --dataset both --format json
+python -m market_intelligence.analysis --dataset both --recent-runs 10
+```
+
+`--recent-runs` (1–100, default 20) bounds the pipeline detail and recent-run
+list; `--stale-hours`/`--recent-sweeps` remain ingestion-only (still validated
+and accepted when the pipeline store is selected).
+
+The pipeline section reads only the Phase-1 approved-run store (`runs`,
+`latest_runs`, `run_articles`, `run_topics`, `run_topic_evidence`, `run_tones`;
+`competitor_profiles` participates in presence/verification only). The two
+stores are independent: no query joins ingestion objects and pipeline objects.
+`latest_runs` is the highest run-version id per `run_id` (insertion order), not
+approval or commit order; all versions remain stored and queryable. `stored_at`
+is statement time, so any freshness derived from it is labelled advisory.
+Every pipeline metric names its scope: occurrence-level (all stored run
+versions), run-level (distinct `run_id`), or latest-version-only. Topics include
+per-topic counts, distinct runs, average model confidence, average source count
+and top keywords; topic evidence includes verified/unverified counts, the
+verification rate (`n/a` when there is no evidence) and the `Unknown source`
+unmatched-citation bucket; tones include the overall distribution, score range
+and top aspects. Bounded lists are capped at 20 rows, and non-array
+keywords/aspects rows are counted rather than silently dropped. A store whose
+objects are all absent reports "not initialized" and still exits 0; a partial
+or incompatible present schema fails closed with the problems listed and
+nothing modified. The pipeline JSON key is additive and optional:
+`report_version` stays `1` and the ingestion-only payload is byte-identical to
+M1.
+
+Example pipeline output (illustrative values):
+
+```text
+Pipeline store: available
+recent_limit: 20
+run versions (all versions): 3; run ids (run-level): 2; run ids with multiple versions (run-level): 1
+newest stored_at (all versions, statement time; advisory): 2026-11-09T11:00:00+00:00; age_seconds: 3600
+articles (all versions): 6; articles (latest versions): 4
+topics (all versions): 5; topics (latest versions): 3; distinct topic names (latest versions): 2
+topics (latest versions, top 20 shown):
+topic_name | topic_occurrences_latest_versions | distinct_runs_latest_versions | avg_model_confidence_latest_versions | avg_source_count_latest_versions
+AI | 2 | 2 | 0.8000 | 2.0000
+keywords (latest versions, top 20):
+keyword | keyword_occurrences_latest_versions
+ai | 2
+malformed keywords rows (latest versions): 0
+evidence (latest versions): rows 4, verified 3, unverified 1, verification_rate 75.0%, unknown_source_citations 1
+evidence rows (all versions): 8
+tones (all versions): 6; tones (latest versions): 4
+tone distribution (latest versions):
+overall | tone_occurrences_latest_versions | avg_score_latest_versions
+positive | 2 | 0.5000
+tone score range (latest versions): min 0.1000, max 0.5000, avg 0.3000
+aspects (latest versions, top 20):
+aspect | aspect_occurrences_latest_versions
+growth | 2
+malformed aspects rows (latest versions): 0
+
+recent runs (latest version per run_id, statement time):
+run_id | run_version_id | stored_at | num_articles
+...
+```
+
 ### Example Output
 The orchestrator will:
 1. Fetch and summarize recent RSS excerpts

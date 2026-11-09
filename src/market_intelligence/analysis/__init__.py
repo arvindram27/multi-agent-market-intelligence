@@ -12,6 +12,8 @@ read-only session.
 from market_intelligence.analysis.report import (
     REPORT_VERSION,
     AnalysisReport,
+    PipelineReport,
+    build_analysis_report,
     build_report,
     render_text,
 )
@@ -19,6 +21,8 @@ from market_intelligence.analysis.report import (
 __all__ = [
     "REPORT_VERSION",
     "AnalysisReport",
+    "PipelineReport",
+    "build_analysis_report",
     "build_report",
     "render_text",
 ]
