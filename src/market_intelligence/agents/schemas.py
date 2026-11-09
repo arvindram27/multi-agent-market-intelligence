@@ -92,14 +92,30 @@ class ToneAspect(BaseModel):
 
     aspect: str
     tone: Literal["positive", "negative", "neutral", "mixed"]
-    score: float = Field(ge=-1.0, le=1.0)
+    score: float = Field(
+        ge=-1.0,
+        le=1.0,
+        description=(
+            "Signed polarity: -1 very negative, +1 very positive; must be > 0 "
+            "when tone is 'positive' and < 0 when tone is 'negative' "
+            "(neutral/mixed may take any value in range)."
+        ),
+    )
 
 
 class NewsToneDraft(BaseModel):
     """LLM-generated tone classification of a news summary."""
 
     overall: Literal["positive", "negative", "neutral", "mixed"]
-    score: float = Field(ge=-1.0, le=1.0)
+    score: float = Field(
+        ge=-1.0,
+        le=1.0,
+        description=(
+            "Signed polarity: -1 very negative, +1 very positive; must be > 0 "
+            "when overall is 'positive' and < 0 when overall is 'negative' "
+            "(neutral/mixed may take any value in range)."
+        ),
+    )
     aspects: list[ToneAspect] = Field(default_factory=list)
 
 

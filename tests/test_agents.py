@@ -1,18 +1,25 @@
 """Agent tests: structured output plus application-owned provenance."""
+import pytest
+
 from market_intelligence.agents.competitor import FetchedPage, analyze_competitor
 from market_intelligence.agents.news import summarize_article
 from market_intelligence.agents.schemas import (
     CompetitorProfileDraft,
     NewsDigest,
     NewsSummary,
+    NewsTone,
     NewsToneDraft,
     ToneAspect,
     TopicAnalysis,
     TopicEvidenceQuote,
     TopicFinding,
 )
-from market_intelligence.agents.tone import analyze_news_tone
+from market_intelligence.agents.tone import (
+    ToneScoreContractError,
+    analyze_news_tone,
+)
 from market_intelligence.agents.topics import identify_topics
+from market_intelligence.retry import is_transient_error
 
 
 def _summary(**overrides):
@@ -173,3 +180,188 @@ def test_analyze_competitor_prompt_contains_page(fake_llm):
     prompt = llm.calls[-1]
     assert "https://acme.com" in prompt
     assert "Acme is a leading widget maker." in prompt
+
+
+# --------------------------------------------------------------------------
+# Tone score contract (signed polarity)
+# --------------------------------------------------------------------------
+_SIGNED_POLARITY_SENTENCE = (
+    "score is signed polarity from -1 (very negative) to +1 (very positive): "
+    "positive tone requires score > 0, negative tone requires score < 0, and "
+    "neutral or mixed may take any value in range."
+)
+
+
+def test_tone_rejects_negative_label_with_positive_score(fake_llm):
+    draft = NewsToneDraft(overall="negative", score=0.8)
+    llm = fake_llm({NewsToneDraft: draft})
+
+    with pytest.raises(ToneScoreContractError) as excinfo:
+        analyze_news_tone(_summary(summary="model-written body text"), llm=llm)
+
+    message = str(excinfo.value)
+    assert "article-1" in message
+    assert "negative" in message
+    assert "score < 0" in message
+    assert "0.8" not in message
+    assert "model-written body text" not in message
+
+
+def test_tone_rejects_negative_label_with_positive_score_085(fake_llm):
+    draft = NewsToneDraft(overall="negative", score=0.85)
+    llm = fake_llm({NewsToneDraft: draft})
+
+    with pytest.raises(ToneScoreContractError) as excinfo:
+        analyze_news_tone(_summary(), llm=llm)
+
+    message = str(excinfo.value)
+    assert "article-1" in message
+    assert "negative" in message
+    assert "score < 0" in message
+    assert "0.85" not in message
+
+
+def test_tone_accepts_consistent_negative(fake_llm):
+    draft = NewsToneDraft(overall="negative", score=-0.6)
+    llm = fake_llm({NewsToneDraft: draft})
+
+    result = analyze_news_tone(_summary(), llm=llm)
+
+    assert isinstance(result, NewsTone)
+    assert result.overall == "negative"
+    assert result.score == pytest.approx(-0.6)
+    assert result.article_id == "article-1"
+
+
+def test_tone_accepts_consistent_positive(fake_llm):
+    draft = NewsToneDraft(overall="positive", score=0.5)
+    llm = fake_llm({NewsToneDraft: draft})
+
+    result = analyze_news_tone(_summary(), llm=llm)
+
+    assert isinstance(result, NewsTone)
+    assert result.overall == "positive"
+    assert result.score == pytest.approx(0.5)
+
+
+def test_tone_boundary_zero_rejected_for_positive(fake_llm):
+    draft = NewsToneDraft(overall="positive", score=0.0)
+    llm = fake_llm({NewsToneDraft: draft})
+
+    with pytest.raises(ToneScoreContractError) as excinfo:
+        analyze_news_tone(_summary(), llm=llm)
+
+    message = str(excinfo.value)
+    assert "overall='positive' requires score > 0" in message
+    assert "0.0" not in message
+
+
+def test_tone_boundary_zero_rejected_for_negative(fake_llm):
+    draft = NewsToneDraft(overall="negative", score=0.0)
+    llm = fake_llm({NewsToneDraft: draft})
+
+    with pytest.raises(ToneScoreContractError) as excinfo:
+        analyze_news_tone(_summary(), llm=llm)
+
+    assert "overall='negative' requires score < 0" in str(excinfo.value)
+
+
+def test_tone_neutral_allows_small_positive_score(fake_llm):
+    draft = NewsToneDraft(overall="neutral", score=0.05)
+    llm = fake_llm({NewsToneDraft: draft})
+
+    result = analyze_news_tone(_summary(), llm=llm)
+
+    assert result.overall == "neutral"
+    assert result.score == pytest.approx(0.05)
+
+
+def test_tone_neutral_allows_large_score(fake_llm):
+    # Known limit: neutral has no sign requirement, so a large score passes.
+    draft = NewsToneDraft(overall="neutral", score=0.9)
+    llm = fake_llm({NewsToneDraft: draft})
+
+    result = analyze_news_tone(_summary(), llm=llm)
+
+    assert result.overall == "neutral"
+    assert result.score == pytest.approx(0.9)
+
+
+def test_tone_mixed_allows_either_sign(fake_llm):
+    for score in (-0.5, 0.5):
+        draft = NewsToneDraft(overall="mixed", score=score)
+        llm = fake_llm({NewsToneDraft: draft})
+
+        result = analyze_news_tone(_summary(), llm=llm)
+
+        assert result.overall == "mixed"
+        assert result.score == pytest.approx(score)
+
+
+def test_tone_rejects_contradictory_aspect(fake_llm):
+    draft = NewsToneDraft(
+        overall="positive",
+        score=0.5,
+        aspects=[ToneAspect(aspect="quality", tone="negative", score=0.4)],
+    )
+    llm = fake_llm({NewsToneDraft: draft})
+
+    with pytest.raises(ToneScoreContractError) as excinfo:
+        analyze_news_tone(_summary(), llm=llm)
+
+    message = str(excinfo.value)
+    assert "article-1" in message
+    assert "aspect #0" in message
+    assert "tone='negative' requires score < 0" in message
+    assert "quality" not in message
+    assert "0.4" not in message
+
+
+def test_tone_accepts_consistent_aspects(fake_llm):
+    draft = NewsToneDraft(
+        overall="positive",
+        score=0.5,
+        aspects=[
+            ToneAspect(aspect="growth", tone="positive", score=0.7),
+            ToneAspect(aspect="risk", tone="neutral", score=0.0),
+            ToneAspect(aspect="cost", tone="mixed", score=-0.4),
+        ],
+    )
+    llm = fake_llm({NewsToneDraft: draft})
+
+    result = analyze_news_tone(_summary(), llm=llm)
+
+    assert [(item.tone, item.score) for item in result.aspects] == [
+        ("positive", 0.7),
+        ("neutral", 0.0),
+        ("mixed", -0.4),
+    ]
+
+
+def test_tone_invalid_draft_uses_one_model_call(fake_llm):
+    draft = NewsToneDraft(overall="negative", score=0.8)
+    llm = fake_llm({NewsToneDraft: draft})
+
+    with pytest.raises(ToneScoreContractError):
+        analyze_news_tone(_summary(), llm=llm)
+
+    assert len(llm.calls) == 1
+
+
+def test_tone_contract_error_is_not_transient():
+    assert is_transient_error(ToneScoreContractError("x")) is False
+
+
+def test_tone_prompt_states_signed_polarity(fake_llm):
+    draft = NewsToneDraft(overall="positive", score=0.5)
+    llm = fake_llm({NewsToneDraft: draft})
+
+    analyze_news_tone(_summary(), llm=llm)
+
+    assert _SIGNED_POLARITY_SENTENCE in llm.calls[-1]
+
+
+def test_score_fields_describe_signed_polarity():
+    for model in (NewsToneDraft, ToneAspect):
+        description = model.model_fields["score"].description or ""
+        assert "signed polarity" in description.lower()
