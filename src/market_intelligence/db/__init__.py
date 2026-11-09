@@ -8,6 +8,7 @@ incompatible existing shape so setup can stop without deleting anything.
 """
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -296,9 +297,12 @@ def _check_constraints(
     schema: str,
     present: dict[str, dict[str, str]],
     problems: list[str],
+    *,
+    required: dict | None = None,
 ) -> None:
+    specs = REQUIRED_CONSTRAINTS if required is None else required
     actual = _actual_constraints(conn, schema)
-    for table, required in REQUIRED_CONSTRAINTS.items():
+    for table, required in specs.items():
         if table not in present:
             continue  # the missing table is already reported
         found = actual.get(table, [])
@@ -335,7 +339,16 @@ def _check_views(
     schema: str,
     present: dict[str, dict[str, str]],
     problems: list[str],
+    *,
+    required_views: dict | None = None,
+    required_definitions: dict | None = None,
 ) -> None:
+    views_spec = REQUIRED_VIEWS if required_views is None else required_views
+    definition_spec = (
+        REQUIRED_VIEW_DEFINITION
+        if required_definitions is None
+        else required_definitions
+    )
     views = {
         row[0]
         for row in conn.execute(
@@ -352,7 +365,7 @@ def _check_views(
         ).fetchall()
     }
 
-    for view, required_columns in REQUIRED_VIEWS.items():
+    for view, required_columns in views_spec.items():
         if view not in views:
             problems.append(f"{schema}.{view} view is missing")
             continue
@@ -364,7 +377,7 @@ def _check_views(
             )
             continue
         normalized = " ".join((definitions.get(view) or "").split()).lower()
-        for fragment in REQUIRED_VIEW_DEFINITION.get(view, ()):
+        for fragment in definition_spec.get(view, ()):
             if fragment not in normalized:
                 problems.append(
                     f"{schema}.{view} view definition does not contain "
@@ -373,18 +386,37 @@ def _check_views(
                 )
 
 
-def verify_schema(conn, schema: str | None = None) -> list[str]:
+def verify_schema(
+    conn,
+    schema: str | None = None,
+    *,
+    required_columns: dict | None = None,
+    required_constraints: dict | None = None,
+    required_views: dict | None = None,
+    required_view_definitions: dict | None = None,
+    version_table: str = "schema_meta",
+    expected_version: int | None = None,
+) -> list[str]:
     """Return human-readable incompatibilities, or an empty list when compatible.
 
     Read-only: safe for ``init_db.py --check``. Checks required columns and
     their PostgreSQL types, primary/unique/foreign-key definitions (rendered as
-    DDL), and the required views.
+    DDL), and the required views. The structural specs default to this
+    module's ``REQUIRED_*`` constants and ``SCHEMA_VERSION``, so default
+    callers behave byte-identically to before; other schemas (the ingestion
+    schema) reuse the machinery with their own specs. ``version_table`` names
+    the singleton version table and is guarded against SQL injection.
     """
+    if not re.fullmatch(r"[a-z_][a-z0-9_]*", version_table):
+        raise ValueError(f"unsafe target table name: {version_table!r}")
+    columns_spec = REQUIRED_COLUMNS if required_columns is None else required_columns
+    expected_version = SCHEMA_VERSION if expected_version is None else expected_version
+
     schema = schema or conn.execute("SELECT current_schema()").fetchone()[0]
     present = _present_columns(conn, schema)
 
     problems: list[str] = []
-    for table, required in REQUIRED_COLUMNS.items():
+    for table, required in columns_spec.items():
         if table not in present:
             problems.append(f"{schema}.{table} is missing")
             continue
@@ -404,25 +436,34 @@ def verify_schema(conn, schema: str | None = None) -> list[str]:
                 f"{schema}.{table} has wrong column types: " + "; ".join(wrong)
             )
 
-    _check_constraints(conn, schema, present, problems)
-    _check_views(conn, schema, present, problems)
+    _check_constraints(
+        conn, schema, present, problems, required=required_constraints
+    )
+    _check_views(
+        conn,
+        schema,
+        present,
+        problems,
+        required_views=required_views,
+        required_definitions=required_view_definitions,
+    )
 
-    if "schema_meta" not in present:
+    if version_table not in present:
         return problems
     try:
         row = conn.execute(
-            "SELECT schema_version FROM schema_meta WHERE singleton"
+            f"SELECT schema_version FROM {version_table} WHERE singleton"
         ).fetchone()
     except Exception as exc:  # table exists with an incompatible shape
-        problems.append(f"{schema}.schema_meta cannot be read: {exc}")
+        problems.append(f"{schema}.{version_table} cannot be read: {exc}")
         return problems
 
     if row is None:
-        problems.append(f"{schema}.schema_meta has no version row")
-    elif row[0] != SCHEMA_VERSION:
+        problems.append(f"{schema}.{version_table} has no version row")
+    elif row[0] != expected_version:
         problems.append(
-            f"{schema}.schema_meta version is {row[0]}, "
-            f"this code expects {SCHEMA_VERSION}"
+            f"{schema}.{version_table} version is {row[0]}, "
+            f"this code expects {expected_version}"
         )
     return problems
 
