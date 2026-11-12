@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="hero_image_symbiotic_intelligence.png" alt="Symbiotic intelligence - multi-agent market intelligence" width="640" />
+  <img src="docs/assets/mami-logo.png" alt="MAMI" width="420" />
 </p>
 
 <h1 align="center">Multi-Agent AI Ecosystem for Market Intelligence</h1>
@@ -26,7 +26,7 @@
   <em>Fixture-mode demo snapshot - not a live run.</em>
 </p>
 
-A comprehensive multi-agent system designed to automate market intelligence gathering, processing, and analysis. This project implements specialized AI agents that work together to provide insights from RSS news excerpts, competitor pages, extracted topics, and model-assessed news tone.
+MAMI reads news feeds and competitor pages and runs typed LLM agents over them. A person reviews each run before anything is saved to Postgres. Each result carries its source details.
 
 > 📄 **Production roadmap:** see [`PRODUCTION_PLAN.md`](./PRODUCTION_PLAN.md) for the target architecture, and the deferred directions under evaluation (Oracle 23ai, LangSmith, Grafana Cloud, RAGAS - not built features).
 
@@ -58,6 +58,9 @@ A comprehensive multi-agent system designed to automate market intelligence gath
 │   ├── db/                             # schema DDL, verification, ingestion/analysis facades
 │   ├── ingestion/                      # feed collector, sweep store, CLI
 │   ├── analysis/                       # read-only SQL analysis report and CLI
+│   ├── control.py                      # H1 audit event chain (offline, not wired in)
+│   ├── admission.py                    # H1 admission policy (offline, not wired in)
+│   ├── ledger.py                       # H1 ledger replay (offline, not wired in)
 │   ├── persistence.py                  # approved-run persistence contract
 │   └── persistence_postgres.py         # Postgres writer for approved runs
 ├── tests/                              # offline suite and Postgres integration tests
@@ -66,7 +69,7 @@ A comprehensive multi-agent system designed to automate market intelligence gath
 ├── scripts/                            # database and ingestion init scripts
 ├── .github/workflows/ci.yml            # CI: offline matrix, Postgres integration, secret scan
 ├── .streamlit/                         # Streamlit configuration
-├── docs/                               # demo screenshots
+├── docs/                               # screenshots, diagrams and logo
 ├── data/                               # local runtime data
 ├── AI Agent Ecosystem Architecture for Market Intelligence.md
 ├── AI Agent Ecosystem_ Components and Roles.md
@@ -101,27 +104,36 @@ A comprehensive multi-agent system designed to automate market intelligence gath
 > `market_intelligence.agents.*`). The legacy tree is retained as the documented baseline;
 > no removal is planned.
 
-## 🛠️ Current Implementation Status
+## Status
 
-### MVP Features (✅ Implemented)
-- Basic RSS feed processing
-- Simple web scraping capabilities
-- Keyword-based trend analysis
-- Rule-based sentiment classification
-- Sequential agent orchestration
+Status reflects the code and offline tests. Live output quality has not been measured.
 
-### Production Features
+### Implemented
+- Typed LLM agents for news summaries, topics, news tone and competitor comparison
+- LangGraph workflow with retries, checkpoints and a human approval gate before saving
+- Per-run ceilings on LLM calls and tokens
+- Postgres storage for approved runs (local Docker)
+- RSS collector that stores feed sweeps and article versions without LLM calls
+- Read-only SQL report on ingestion health and stored results
+- Streamlit demo in live mode and fixture mode
+- GitHub Actions CI with offline tests on Python 3.11 to 3.13, Postgres integration tests and a secret scan
 
-**Implemented:**
-- ✅ **LLM agents** with typed Pydantic output (LangChain `init_chat_model` → OpenAI)
-- ✅ **LangGraph** orchestration: checkpointing, retries, human approval in the loop
-- ✅ **Postgres persistence for approved runs** (local Docker): one transaction per snapshot with provenance; retries stay idempotent via run id and content hash
-- ✅ **Streamlit demo UI**: live mode streams agent progress; fixture mode runs saved demo data, no API key needed
+### Built but not connected
+The H1 control layer is a set of offline Python libraries with tests. The pipeline does not call any of it yet.
+- Audit event chain: append-only and hash-chained in SQLite with a read-only verifier
+- Admission policy: pure allow or deny checks with a token reservation estimate
+- Ledger replay: rebuilds per-run token accounts from the audit events and checks stored rows
 
-**Deferred ideas, not started or committed (see `PRODUCTION_PLAN.md`):**
-- Oracle Autonomous Database 23ai adapter + AI Vector Search (RAG) for the production data layer
-- Observability via LangSmith + OpenTelemetry → Grafana Cloud
-- Evaluation via RAGAS + LangSmith datasets (offline + online)
+### Planned
+- Gatekeeper, tokenizer and request serializer, then wiring into the pipeline
+- Ideas only: Oracle 23ai with vector search, LangSmith with OpenTelemetry, RAGAS evaluation and FastAPI (see `PRODUCTION_PLAN.md`)
+
+### Limits
+- No measured output quality on live runs and no evaluation set yet
+- Topics come from one snapshot so they are not trends over time
+- News tone is a model assessment and not consumer sentiment
+- Local use only and not multi-tenant safe
+- The legacy MVP in `agents/` and `orchestration/` stays as a baseline
 
 ## 🚀 Quick Start
 
@@ -565,41 +577,23 @@ The app labels it as **fixture data captured 2026-10-21, not a live run**.
 
 ## 📊 Architecture Overview
 
-```
-┌─────────────────┐    ┌──────────────────┐    ┌─────────────────┐
-│  News Agent     │    │ Competitor Agent │    │  Topic Agent    │
-│                 │    │                  │    │                 │
-│ • RSS Parsing   │    │ • Web Scraping   │    │ • Source IDs    │
-│ • Summarization │    │ • Retrieved Src  │    │ • Evidence Check│
-└─────────┬───────┘    └────────┬─────────┘    └─────────┬───────┘
-          │                     │                        │
-          │              ┌──────▼──────┐                 │
-          └──────────────►│ Orchestrator├─────────────────┘
-                         │             │
-          ┌──────────────►│ Coordinates ├─────────────────┐
-          │              │  All Agents │                 │
-          │              └─────────────┘                 │
-          │                                              │
-┌─────────▼───────┐                              ┌───────▼─────────┐
-│ News Tone Agent │                              │   Data Storage  │
-│                 │                              │                 │
-│ • Summary Tone  │                              │ • Results       │
-│ • Aspect Tone   │                              │ • Insights      │
-└─────────────────┘                              └─────────────────┘
-```
+![MAMI architecture overview](docs/diagrams/mami-architecture-overview.png)
+
+C4-style component overview. It mixes deployable parts and in-process modules. The H1 libraries sit apart because the pipeline does not call them. Editable source: `docs/diagrams/mami-architecture-overview.svg`.
 
 ## 🔧 Technology Stack
 
-**Current MVP Stack:**
-- Python 3.x
-- feedparser (RSS processing)
-- requests + BeautifulSoup (web scraping)
-- collections.Counter (basic analytics)
+**Implemented stack:**
+- Python 3.11 or newer
+- LangGraph and LangChain with OpenAI models through `init_chat_model`
+- Pydantic typed outputs
+- Streamlit
+- PostgreSQL with psycopg and Docker Compose
+- feedparser, requests and BeautifulSoup
+- SQLite for demo checkpoints
 
-**Current stack additions (implemented):**
-- LangGraph orchestration + LangChain typed agents
-- OpenAI models via `init_chat_model` (provider-agnostic)
-- Streamlit demo UI
+**Offline libraries (H1, not connected):**
+- Python standard library `sqlite3` for the audit event chain
 
 **Deferred stack ideas (not started or committed):**
 - Oracle Autonomous Database 23ai: AI Vector Search (HNSW/IVF) via `langchain-oracledb`
@@ -644,9 +638,7 @@ This project is designed as a comprehensive market intelligence solution. Future
 - API keys live in `.env` locally and in a managed secret store when deployed. See
   [Secrets](#-secrets).
 - Pre-commit hooks (`detect-secrets`, `detect-private-key`) block accidental commits.
-- Follow data privacy regulations (GDPR, CCPA)
-- Secure web scraping practices
-- Ethical AI model deployment
+- Web fetching is bounded and guarded against SSRF. See the Ingestion safety section.
 
 ## 📞 Support
 
@@ -658,4 +650,4 @@ Released under the [MIT License](./LICENSE). Copyright (c) 2026 arvindram27.
 
 ---
 
-**Status**: LangGraph pipeline with typed LLM agents, Postgres persistence, a local RSS ingestion store, a read-only SQL analysis layer, CI on every push, and the Streamlit demo in fixture mode.
+**Status**: LangGraph pipeline with Postgres storage, RSS ingestion, SQL analysis and CI, implemented in code. The H1 control libraries are built and tested offline but not connected.

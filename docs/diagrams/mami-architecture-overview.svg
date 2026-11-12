@@ -1,0 +1,144 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1800" height="1340" viewBox="0 0 1800 1340">
+<defs><marker id="ah" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto"><path d="M0,0 L10,4 L0,8 z" fill="#333"/></marker></defs>
+<rect width="1800" height="1340" fill="#fff"/>
+<text x="40" y="48" font-size="28" font-weight="700" fill="#1b1b1b" font-family="Liberation Sans, Arial, Helvetica, sans-serif">MAMI architecture overview</text>
+<text x="40" y="76" font-size="15" fill="#555" font-family="Liberation Sans, Arial, Helvetica, sans-serif">C4-style component overview. Status comes from code (published 225c3aa plus the reviewed local ledger slice) and offline tests, not live runs. Light blue is built but not connected. Dashed is planned.</text>
+<rect x="40" y="150" width="200" height="130" rx="10" fill="#08427b" stroke="#052e56" stroke-width="2" />
+<text x="140.0" y="180" text-anchor="middle" font-size="18" font-weight="700" fill="#fff" font-family="Liberation Sans, Arial, Helvetica, sans-serif">Analyst</text>
+<text x="140.0" y="202" text-anchor="middle" font-size="12" fill="#fff" opacity="0.85" font-family="Liberation Sans, Arial, Helvetica, sans-serif">[person]</text>
+<text x="140.0" y="220" text-anchor="middle" font-size="13" fill="#fff" font-family="Liberation Sans, Arial, Helvetica, sans-serif">Reviews results and</text>
+<text x="140.0" y="238" text-anchor="middle" font-size="13" fill="#fff" font-family="Liberation Sans, Arial, Helvetica, sans-serif">approves or rejects each</text>
+<text x="140.0" y="256" text-anchor="middle" font-size="13" fill="#fff" font-family="Liberation Sans, Arial, Helvetica, sans-serif">run.</text>
+<rect x="40" y="360" width="200" height="130" rx="10" fill="#6b6b6b" stroke="#4a4a4a" stroke-width="2" />
+<text x="140.0" y="390" text-anchor="middle" font-size="18" font-weight="700" fill="#fff" font-family="Liberation Sans, Arial, Helvetica, sans-serif">RSS feeds</text>
+<text x="140.0" y="412" text-anchor="middle" font-size="12" fill="#fff" opacity="0.85" font-family="Liberation Sans, Arial, Helvetica, sans-serif">[external system]</text>
+<text x="140.0" y="430" text-anchor="middle" font-size="13" fill="#fff" font-family="Liberation Sans, Arial, Helvetica, sans-serif">Configured news sources.</text>
+<rect x="1590" y="150" width="170" height="80" rx="10" fill="#6b6b6b" stroke="#4a4a4a" stroke-width="2" />
+<text x="1675.0" y="180" text-anchor="middle" font-size="18" font-weight="700" fill="#fff" font-family="Liberation Sans, Arial, Helvetica, sans-serif">OpenAI API</text>
+<text x="1675.0" y="202" text-anchor="middle" font-size="12" fill="#fff" opacity="0.85" font-family="Liberation Sans, Arial, Helvetica, sans-serif">[external system]</text>
+<rect x="1590" y="250" width="170" height="100" rx="10" fill="#6b6b6b" stroke="#4a4a4a" stroke-width="2" />
+<text x="1675.0" y="280" text-anchor="middle" font-size="18" font-weight="700" fill="#fff" font-family="Liberation Sans, Arial, Helvetica, sans-serif">Feeds and pages</text>
+<text x="1675.0" y="302" text-anchor="middle" font-size="12" fill="#fff" opacity="0.85" font-family="Liberation Sans, Arial, Helvetica, sans-serif">[external system]</text>
+<text x="1675.0" y="320" text-anchor="middle" font-size="13" fill="#fff" font-family="Liberation Sans, Arial, Helvetica, sans-serif">News feeds and</text>
+<text x="1675.0" y="338" text-anchor="middle" font-size="13" fill="#fff" font-family="Liberation Sans, Arial, Helvetica, sans-serif">competitor pages.</text>
+<rect x="270" y="110" width="1270" height="640" rx="14" fill="none" stroke="#1168bd" stroke-width="2" stroke-dasharray="none"/>
+<text x="286" y="136" font-size="16" font-weight="700" fill="#1168bd" font-family="Liberation Sans, Arial, Helvetica, sans-serif">MAMI (implemented in code)</text>
+<rect x="300" y="150" width="280" height="170" rx="10" fill="#1168bd" stroke="#0b4884" stroke-width="2" />
+<text x="440.0" y="180" text-anchor="middle" font-size="18" font-weight="700" fill="#fff" font-family="Liberation Sans, Arial, Helvetica, sans-serif">Streamlit demo</text>
+<text x="440.0" y="202" text-anchor="middle" font-size="12" fill="#fff" opacity="0.85" font-family="Liberation Sans, Arial, Helvetica, sans-serif">[Python, Streamlit]</text>
+<text x="440.0" y="220" text-anchor="middle" font-size="13" fill="#fff" font-family="Liberation Sans, Arial, Helvetica, sans-serif">Runs the graph live or loads saved</text>
+<text x="440.0" y="238" text-anchor="middle" font-size="13" fill="#fff" font-family="Liberation Sans, Arial, Helvetica, sans-serif">fixtures. Approve or reject each run</text>
+<text x="440.0" y="256" text-anchor="middle" font-size="13" fill="#fff" font-family="Liberation Sans, Arial, Helvetica, sans-serif">before saving.</text>
+<rect x="640" y="150" width="320" height="170" rx="10" fill="#1168bd" stroke="#0b4884" stroke-width="2" />
+<text x="800.0" y="180" text-anchor="middle" font-size="18" font-weight="700" fill="#fff" font-family="Liberation Sans, Arial, Helvetica, sans-serif">LangGraph pipeline</text>
+<text x="800.0" y="202" text-anchor="middle" font-size="12" fill="#fff" opacity="0.85" font-family="Liberation Sans, Arial, Helvetica, sans-serif">[Python, LangGraph]</text>
+<text x="800.0" y="220" text-anchor="middle" font-size="13" fill="#fff" font-family="Liberation Sans, Arial, Helvetica, sans-serif">News, then topics and tone in parallel, then</text>
+<text x="800.0" y="238" text-anchor="middle" font-size="13" fill="#fff" font-family="Liberation Sans, Arial, Helvetica, sans-serif">competitor comparison, then a review gate,</text>
+<text x="800.0" y="256" text-anchor="middle" font-size="13" fill="#fff" font-family="Liberation Sans, Arial, Helvetica, sans-serif">then persist. Retries transient errors. Per-</text>
+<text x="800.0" y="274" text-anchor="middle" font-size="13" fill="#fff" font-family="Liberation Sans, Arial, Helvetica, sans-serif">run call and token ceilings. SQLite</text>
+<text x="800.0" y="292" text-anchor="middle" font-size="13" fill="#fff" font-family="Liberation Sans, Arial, Helvetica, sans-serif">checkpoints in the demo.</text>
+<rect x="1020" y="150" width="480" height="170" rx="10" fill="#1168bd" stroke="#0b4884" stroke-width="2" />
+<text x="1260.0" y="180" text-anchor="middle" font-size="18" font-weight="700" fill="#fff" font-family="Liberation Sans, Arial, Helvetica, sans-serif">LLM agents</text>
+<text x="1260.0" y="202" text-anchor="middle" font-size="12" fill="#fff" opacity="0.85" font-family="Liberation Sans, Arial, Helvetica, sans-serif">[Python, LangChain]</text>
+<text x="1260.0" y="220" text-anchor="middle" font-size="13" fill="#fff" font-family="Liberation Sans, Arial, Helvetica, sans-serif">News, topics, news tone and comparison agents with typed output.</text>
+<text x="1260.0" y="238" text-anchor="middle" font-size="13" fill="#fff" font-family="Liberation Sans, Arial, Helvetica, sans-serif">Cited quotes are checked against captured text. Fetching is bounded</text>
+<text x="1260.0" y="256" text-anchor="middle" font-size="13" fill="#fff" font-family="Liberation Sans, Arial, Helvetica, sans-serif">with SSRF guards.</text>
+<rect x="300" y="360" width="280" height="130" rx="10" fill="#1168bd" stroke="#0b4884" stroke-width="2" />
+<text x="440.0" y="390" text-anchor="middle" font-size="18" font-weight="700" fill="#fff" font-family="Liberation Sans, Arial, Helvetica, sans-serif">Ingestion collector</text>
+<text x="440.0" y="412" text-anchor="middle" font-size="12" fill="#fff" opacity="0.85" font-family="Liberation Sans, Arial, Helvetica, sans-serif">[Python, CLI]</text>
+<text x="440.0" y="430" text-anchor="middle" font-size="13" fill="#fff" font-family="Liberation Sans, Arial, Helvetica, sans-serif">Collects RSS sweeps and article</text>
+<text x="440.0" y="448" text-anchor="middle" font-size="13" fill="#fff" font-family="Liberation Sans, Arial, Helvetica, sans-serif">versions. No LLM calls.</text>
+<rect x="400" y="570" width="540" height="120" rx="10" fill="#1168bd" stroke="#0b4884" stroke-width="2" />
+<text x="670.0" y="600" text-anchor="middle" font-size="18" font-weight="700" fill="#fff" font-family="Liberation Sans, Arial, Helvetica, sans-serif">Postgres</text>
+<text x="670.0" y="622" text-anchor="middle" font-size="12" fill="#fff" opacity="0.85" font-family="Liberation Sans, Arial, Helvetica, sans-serif">[Docker, PostgreSQL]</text>
+<text x="670.0" y="640" text-anchor="middle" font-size="13" fill="#fff" font-family="Liberation Sans, Arial, Helvetica, sans-serif">Approved runs with provenance. Ingestion sweeps and article versions.</text>
+<rect x="1100" y="570" width="400" height="120" rx="10" fill="#1168bd" stroke="#0b4884" stroke-width="2" />
+<text x="1300.0" y="600" text-anchor="middle" font-size="18" font-weight="700" fill="#fff" font-family="Liberation Sans, Arial, Helvetica, sans-serif">SQL analysis report</text>
+<text x="1300.0" y="622" text-anchor="middle" font-size="12" fill="#fff" opacity="0.85" font-family="Liberation Sans, Arial, Helvetica, sans-serif">[Python, CLI]</text>
+<text x="1300.0" y="640" text-anchor="middle" font-size="13" fill="#fff" font-family="Liberation Sans, Arial, Helvetica, sans-serif">Read-only report on ingestion health and stored pipeline</text>
+<text x="1300.0" y="658" text-anchor="middle" font-size="13" fill="#fff" font-family="Liberation Sans, Arial, Helvetica, sans-serif">results.</text>
+<line x1="240" y1="215" x2="300" y2="215" stroke="#333" stroke-width="2"  marker-end="url(#ah)"/>
+<rect x="251.6" y="184.0" width="36.8" height="20" fill="#fff" opacity="0.92"/>
+<text x="270" y="198.0" text-anchor="middle" font-size="12" fill="#333" font-family="Liberation Sans, Arial, Helvetica, sans-serif">Uses</text>
+<line x1="580" y1="225" x2="640" y2="225" stroke="#333" stroke-width="2"  marker-end="url(#ah)"/>
+<rect x="579.2" y="181.0" width="61.6" height="36" fill="#fff" opacity="0.92"/>
+<text x="610" y="195.0" text-anchor="middle" font-size="12" fill="#333" font-family="Liberation Sans, Arial, Helvetica, sans-serif">Runs and</text>
+<text x="610" y="211.0" text-anchor="middle" font-size="12" fill="#333" font-family="Liberation Sans, Arial, Helvetica, sans-serif">resumes</text>
+<line x1="960" y1="225" x2="1020" y2="225" stroke="#333" stroke-width="2"  marker-end="url(#ah)"/>
+<rect x="968.5" y="195.0" width="43.0" height="20" fill="#fff" opacity="0.92"/>
+<text x="990" y="209.0" text-anchor="middle" font-size="12" fill="#333" font-family="Liberation Sans, Arial, Helvetica, sans-serif">Calls</text>
+<line x1="1500" y1="185" x2="1590" y2="185" stroke="#333" stroke-width="2"  marker-end="url(#ah)"/>
+<rect x="1511.1" y="157.0" width="67.80000000000001" height="20" fill="#fff" opacity="0.92"/>
+<text x="1545" y="171.0" text-anchor="middle" font-size="12" fill="#333" font-family="Liberation Sans, Arial, Helvetica, sans-serif">LLM calls</text>
+<line x1="1500" y1="270" x2="1590" y2="270" stroke="#333" stroke-width="2"  marker-end="url(#ah)"/>
+<rect x="1517.3" y="242.0" width="55.4" height="20" fill="#fff" opacity="0.92"/>
+<text x="1545" y="256.0" text-anchor="middle" font-size="12" fill="#333" font-family="Liberation Sans, Arial, Helvetica, sans-serif">Fetches</text>
+<line x1="800" y1="320" x2="800" y2="570" stroke="#333" stroke-width="2"  marker-end="url(#ah)"/>
+<rect x="735.1" y="426.0" width="129.8" height="36" fill="#fff" opacity="0.92"/>
+<text x="800" y="440.0" text-anchor="middle" font-size="12" fill="#333" font-family="Liberation Sans, Arial, Helvetica, sans-serif">Saves approved runs</text>
+<text x="800" y="456.0" text-anchor="middle" font-size="12" fill="#333" font-family="Liberation Sans, Arial, Helvetica, sans-serif">after review</text>
+<line x1="440" y1="490" x2="440" y2="570" stroke="#333" stroke-width="2"  marker-end="url(#ah)"/>
+<rect x="393.7" y="519.0" width="92.60000000000001" height="20" fill="#fff" opacity="0.92"/>
+<text x="440" y="533.0" text-anchor="middle" font-size="12" fill="#333" font-family="Liberation Sans, Arial, Helvetica, sans-serif">Writes sweeps</text>
+<line x1="1100" y1="630" x2="940" y2="630" stroke="#333" stroke-width="2"  marker-end="url(#ah)"/>
+<rect x="967.5" y="577.0" width="105.0" height="36" fill="#fff" opacity="0.92"/>
+<text x="1020" y="591.0" text-anchor="middle" font-size="12" fill="#333" font-family="Liberation Sans, Arial, Helvetica, sans-serif">Reads</text>
+<text x="1020" y="607.0" text-anchor="middle" font-size="12" fill="#333" font-family="Liberation Sans, Arial, Helvetica, sans-serif">(read-only SQL)</text>
+<line x1="240" y1="425" x2="300" y2="425" stroke="#333" stroke-width="2"  marker-end="url(#ah)"/>
+<rect x="242.3" y="394.0" width="55.4" height="20" fill="#fff" opacity="0.92"/>
+<text x="270" y="408.0" text-anchor="middle" font-size="12" fill="#333" font-family="Liberation Sans, Arial, Helvetica, sans-serif">Fetches</text>
+<rect x="270" y="770" width="880" height="240" rx="14" fill="none" stroke="#1168bd" stroke-width="2" stroke-dasharray="9 6"/>
+<text x="286" y="796" font-size="16" font-weight="700" fill="#1168bd" font-family="Liberation Sans, Arial, Helvetica, sans-serif">H1 control layer (offline libraries, not connected to the pipeline today)</text>
+<rect x="295" y="815" width="200" height="170" rx="10" fill="#dbe9f8" stroke="#1168bd" stroke-width="2" />
+<text x="395.0" y="845" text-anchor="middle" font-size="18" font-weight="700" fill="#0b2f57" font-family="Liberation Sans, Arial, Helvetica, sans-serif">Admission</text>
+<text x="395.0" y="867" text-anchor="middle" font-size="12" fill="#0b2f57" opacity="0.85" font-family="Liberation Sans, Arial, Helvetica, sans-serif">[Python library]</text>
+<text x="395.0" y="885" text-anchor="middle" font-size="13" fill="#0b2f57" font-family="Liberation Sans, Arial, Helvetica, sans-serif">Pure policy checks and</text>
+<text x="395.0" y="903" text-anchor="middle" font-size="13" fill="#0b2f57" font-family="Liberation Sans, Arial, Helvetica, sans-serif">token reservation</text>
+<text x="395.0" y="921" text-anchor="middle" font-size="13" fill="#0b2f57" font-family="Liberation Sans, Arial, Helvetica, sans-serif">estimates. No I/O.</text>
+<rect x="525" y="815" width="220" height="170" rx="10" fill="#dbe9f8" stroke="#1168bd" stroke-width="2" />
+<text x="635.0" y="845" text-anchor="middle" font-size="18" font-weight="700" fill="#0b2f57" font-family="Liberation Sans, Arial, Helvetica, sans-serif">Audit event chain</text>
+<text x="635.0" y="867" text-anchor="middle" font-size="12" fill="#0b2f57" opacity="0.85" font-family="Liberation Sans, Arial, Helvetica, sans-serif">[Python library, SQLite]</text>
+<text x="635.0" y="885" text-anchor="middle" font-size="13" fill="#0b2f57" font-family="Liberation Sans, Arial, Helvetica, sans-serif">Append-only hash-chained</text>
+<text x="635.0" y="903" text-anchor="middle" font-size="13" fill="#0b2f57" font-family="Liberation Sans, Arial, Helvetica, sans-serif">events. Read-only chain</text>
+<text x="635.0" y="921" text-anchor="middle" font-size="13" fill="#0b2f57" font-family="Liberation Sans, Arial, Helvetica, sans-serif">verifier.</text>
+<rect x="850" y="815" width="280" height="170" rx="10" fill="#dbe9f8" stroke="#1168bd" stroke-width="2" />
+<text x="990.0" y="845" text-anchor="middle" font-size="18" font-weight="700" fill="#0b2f57" font-family="Liberation Sans, Arial, Helvetica, sans-serif">Ledger replay</text>
+<text x="990.0" y="867" text-anchor="middle" font-size="12" fill="#0b2f57" opacity="0.85" font-family="Liberation Sans, Arial, Helvetica, sans-serif">[Python library]</text>
+<text x="990.0" y="885" text-anchor="middle" font-size="13" fill="#0b2f57" font-family="Liberation Sans, Arial, Helvetica, sans-serif">Rebuilds per-run token accounts from</text>
+<text x="990.0" y="903" text-anchor="middle" font-size="13" fill="#0b2f57" font-family="Liberation Sans, Arial, Helvetica, sans-serif">the events and checks stored rows.</text>
+<text x="990.0" y="921" text-anchor="middle" font-size="13" fill="#0b2f57" font-family="Liberation Sans, Arial, Helvetica, sans-serif">Tests create the tables.</text>
+<line x1="850" y1="900" x2="745" y2="900" stroke="#333" stroke-width="2"  marker-end="url(#ah)"/>
+<rect x="753.8" y="853.0" width="86.4" height="36" fill="#fff" opacity="0.92"/>
+<text x="797" y="867.0" text-anchor="middle" font-size="12" fill="#333" font-family="Liberation Sans, Arial, Helvetica, sans-serif">Replays</text>
+<text x="797" y="883.0" text-anchor="middle" font-size="12" fill="#333" font-family="Liberation Sans, Arial, Helvetica, sans-serif">and verifies</text>
+<rect x="1190" y="770" width="350" height="240" rx="14" fill="none" stroke="#8a8a8a" stroke-width="2" stroke-dasharray="9 6"/>
+<text x="1206" y="796" font-size="16" font-weight="700" fill="#8a8a8a" font-family="Liberation Sans, Arial, Helvetica, sans-serif">Planned integration</text>
+<rect x="1210" y="805" width="310" height="50" rx="10" fill="#ffffff" stroke="#8a8a8a" stroke-width="2" stroke-dasharray="7 5"/>
+<text x="1365.0" y="835" text-anchor="middle" font-size="18" font-weight="700" fill="#5c5c5c" font-family="Liberation Sans, Arial, Helvetica, sans-serif">Gatekeeper</text>
+
+<rect x="1210" y="865" width="310" height="50" rx="10" fill="#ffffff" stroke="#8a8a8a" stroke-width="2" stroke-dasharray="7 5"/>
+<text x="1365.0" y="895" text-anchor="middle" font-size="18" font-weight="700" fill="#5c5c5c" font-family="Liberation Sans, Arial, Helvetica, sans-serif">Tokenizer and request serializer</text>
+<rect x="1210" y="925" width="310" height="50" rx="10" fill="#ffffff" stroke="#8a8a8a" stroke-width="2" stroke-dasharray="7 5"/>
+<text x="1365.0" y="955" text-anchor="middle" font-size="18" font-weight="700" fill="#5c5c5c" font-family="Liberation Sans, Arial, Helvetica, sans-serif">Wiring into the pipeline</text>
+<rect x="270" y="1050" width="1270" height="150" rx="14" fill="none" stroke="#8a8a8a" stroke-width="2" stroke-dasharray="9 6"/>
+<text x="286" y="1076" font-size="16" font-weight="700" fill="#8a8a8a" font-family="Liberation Sans, Arial, Helvetica, sans-serif">Planned or deferred. Not started.</text>
+<rect x="300" y="1090" width="285" height="80" rx="10" fill="#ffffff" stroke="#8a8a8a" stroke-width="2" stroke-dasharray="7 5"/>
+<text x="442.5" y="1120" text-anchor="middle" font-size="18" font-weight="700" fill="#5c5c5c" font-family="Liberation Sans, Arial, Helvetica, sans-serif">Oracle 23ai and vector search</text>
+<rect x="610" y="1090" width="285" height="80" rx="10" fill="#ffffff" stroke="#8a8a8a" stroke-width="2" stroke-dasharray="7 5"/>
+<text x="752.5" y="1120" text-anchor="middle" font-size="18" font-weight="700" fill="#5c5c5c" font-family="Liberation Sans, Arial, Helvetica, sans-serif">LangSmith and OpenTelemetry</text>
+<rect x="920" y="1090" width="285" height="80" rx="10" fill="#ffffff" stroke="#8a8a8a" stroke-width="2" stroke-dasharray="7 5"/>
+<text x="1062.5" y="1120" text-anchor="middle" font-size="18" font-weight="700" fill="#5c5c5c" font-family="Liberation Sans, Arial, Helvetica, sans-serif">RAGAS evaluation</text>
+<rect x="1230" y="1090" width="285" height="80" rx="10" fill="#ffffff" stroke="#8a8a8a" stroke-width="2" stroke-dasharray="7 5"/>
+<text x="1372.5" y="1120" text-anchor="middle" font-size="18" font-weight="700" fill="#5c5c5c" font-family="Liberation Sans, Arial, Helvetica, sans-serif">FastAPI serving</text>
+<text x="40" y="1250" font-size="15" font-weight="700" fill="#333" font-family="Liberation Sans, Arial, Helvetica, sans-serif">Legend</text>
+<rect x="40" y="1270" width="46" height="28" rx="5" fill="#1168bd" stroke="#0b4884" stroke-width="2" />
+<text x="98" y="1290" font-size="14" fill="#333" font-family="Liberation Sans, Arial, Helvetica, sans-serif">Implemented in code</text>
+<rect x="370" y="1270" width="46" height="28" rx="5" fill="#dbe9f8" stroke="#1168bd" stroke-width="2" />
+<text x="428" y="1290" font-size="14" fill="#333" font-family="Liberation Sans, Arial, Helvetica, sans-serif">Built and tested offline, not connected</text>
+<rect x="700" y="1270" width="46" height="28" rx="5" fill="#fff" stroke="#8a8a8a" stroke-width="2" stroke-dasharray="7 5"/>
+<text x="758" y="1290" font-size="14" fill="#333" font-family="Liberation Sans, Arial, Helvetica, sans-serif">Planned</text>
+<rect x="1030" y="1270" width="46" height="28" rx="5" fill="#6b6b6b" stroke="#4a4a4a" stroke-width="2" />
+<text x="1088" y="1290" font-size="14" fill="#333" font-family="Liberation Sans, Arial, Helvetica, sans-serif">External system</text>
+<rect x="1360" y="1270" width="46" height="28" rx="5" fill="#08427b" stroke="#052e56" stroke-width="2" />
+<text x="1418" y="1290" font-size="14" fill="#333" font-family="Liberation Sans, Arial, Helvetica, sans-serif">Person</text>
+</svg>
