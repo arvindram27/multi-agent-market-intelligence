@@ -1197,6 +1197,27 @@ def _chain_problems(
     return problems
 
 
+def chain_problems(
+    rows: list[tuple[int, str, str | None, str, str]],
+    head: tuple[int, str] | None,
+    *,
+    allow_empty: bool,
+) -> list[str]:
+    """Public read-only wrapper over _chain_problems (same rows and order)."""
+    return _chain_problems(rows, head, allow_empty=allow_empty)
+
+
+def event_from_payload(
+    parsed: Mapping[str, Any], label: str = "payload"
+) -> AuditEvent:
+    """Public read-only wrapper over _payload_event; raises ValueError on failure."""
+    problems: list[str] = []
+    event = _payload_event(parsed, label, problems)
+    if event is None:
+        raise ValueError(problems[0] if problems else f"{label}: payload fails the event schema")
+    return event
+
+
 def _dt(value: str) -> datetime:
     return datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone(timezone.utc)
 
