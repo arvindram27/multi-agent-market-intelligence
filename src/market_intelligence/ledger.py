@@ -1,7 +1,9 @@
 """Pure ledger replay and read-only verifier for H1 slice 2b-ii-A.
 
-No production path in this module writes a database. The SQL constants are
-executed only by tests. ``next_state`` is pure and never reads a clock or calls
+``ensure_schema`` and ``apply_state`` write only on a caller-supplied connection
+inside a caller-owned transaction; they never begin, commit or roll back, and
+``verify_ledger`` and the read helpers stay read-only. Only LedgerProjection calls the write
+functions, and nothing calls it yet. ``next_state`` is pure and never reads a clock or calls
 admission decide_* functions.
 
 Limits: the chain does not store the request's max_output_tokens, tokenizer
@@ -152,7 +154,7 @@ class _BusyDatabase(Exception):
     """Internal signal for a locked/busy SQLite read."""
 
 
-class LedgerError(ValueError):
+class LedgerError(control.ProjectionRejected):
     """Base class for deterministic ledger rule failures."""
 
 
@@ -929,3 +931,305 @@ def verify_ledger(path: str | Path) -> list[str]:
     for name in ("run_policy", "run_ledger", "reservations", "run_leases", "ledger_head"):
         problems.extend(_compare_table(name, expected[name], tables.get(name, [])))
     return problems
+
+
+SCHEMA_STATEMENTS = (
+    RUN_POLICY_SQL,
+    RUN_LEDGER_SQL,
+    RESERVATIONS_SQL,
+    RUN_LEASES_SQL,
+    LEDGER_HEAD_SQL,
+)
+
+
+def _build_upsert_sql() -> dict[str, str]:
+    statements: dict[str, str] = {}
+    for table, columns in COLUMNS.items():
+        key = TABLE_KEYS[table]
+        marks = ", ".join("?" for _ in columns)
+        updates = ", ".join(
+            f"{column} = excluded.{column}" for column in columns if column != key
+        )
+        statements[table] = (
+            f"INSERT INTO {table} ({', '.join(columns)}) VALUES ({marks}) "
+            f"ON CONFLICT({key}) DO UPDATE SET {updates}"
+        )
+    return statements
+
+
+UPSERT_SQL = _build_upsert_sql()
+
+
+class LedgerProjectionMismatch(LedgerError):
+    """The live schema is not exactly the expected ledger schema."""
+
+    def __init__(self, problems: list[str]):
+        self.problems = tuple(problems)
+        super().__init__("; ".join(self.problems))
+
+
+class LedgerUsageError(RuntimeError):
+    """The caller broke a syntactic precondition of a projection function."""
+
+
+def _validate_projection_head(audit_head: object):
+    if type(audit_head) is not tuple or len(audit_head) != 2:
+        raise LedgerUsageError("audit_head must be a (seq, event_hash) tuple")
+    seq, event_hash = audit_head
+    if type(seq) is not int or seq < 1:
+        raise LedgerUsageError("audit_head seq must be an int >= 1")
+    if type(event_hash) is not str or not event_hash:
+        raise LedgerUsageError("audit_head event_hash must be a non-empty str")
+    return seq, event_hash
+
+
+def schema_problems(conn: sqlite3.Connection) -> list[str]:
+    """Compare the live ledger schema with a private reference schema.
+
+    Read only. Never commits or rolls back, and never closes the supplied
+    connection. Limits: views that merely reference a ledger table are not
+    detected, attached databases are not inspected, and unrelated objects are
+    ignored.
+    """
+    names = tuple(COLUMNS)
+    query = (
+        "SELECT type, name, tbl_name, sql FROM sqlite_master "
+        "WHERE tbl_name IN (?, ?, ?, ?, ?) ORDER BY type, name"
+    )
+    temp_query = query.replace("sqlite_master", "sqlite_temp_master")
+    reference = sqlite3.connect(":memory:")
+    try:
+        for statement in SCHEMA_STATEMENTS:
+            reference.execute(statement)
+        reference_rows = reference.execute(query, names).fetchall()
+    finally:
+        reference.close()
+    live_rows = conn.execute(query, names).fetchall()
+    temp_rows = conn.execute(temp_query, names).fetchall()
+
+    def indexed(rows):
+        return {(row[0], row[1]): (row[2], row[3]) for row in rows}
+
+    expected = indexed(reference_rows)
+    actual = indexed(live_rows)
+    problems: list[str] = []
+    for object_type, name in sorted(expected):
+        tbl_name, sql = expected[(object_type, name)]
+        if (object_type, name) not in actual:
+            problems.append(f"missing {object_type} {name} on {tbl_name}")
+        elif actual[(object_type, name)] != (tbl_name, sql):
+            problems.append(f"different {object_type} {name} on {tbl_name}")
+    for object_type, name in sorted(set(actual) - set(expected)):
+        tbl_name, _ = actual[(object_type, name)]
+        problems.append(f"unexpected {object_type} {name} on {tbl_name}")
+    for object_type, name, tbl_name, _ in temp_rows:
+        problems.append(f"TEMP {object_type} {name} on {tbl_name}")
+    return problems
+
+
+def ensure_schema(conn: sqlite3.Connection) -> None:
+    """Create the five ledger tables only inside the caller's open transaction.
+
+    No commit, no rollback: the caller owns the transaction. Table creation is
+    executed one statement at a time so it stays inside that transaction.
+    """
+    if not conn.in_transaction:
+        raise LedgerUsageError("ensure_schema requires an active transaction")
+    for statement in SCHEMA_STATEMENTS:
+        conn.execute(statement)
+    problems = schema_problems(conn)
+    if problems:
+        raise LedgerProjectionMismatch(problems)
+
+
+def projection_problems(
+    conn: sqlite3.Connection,
+    state: LedgerState,
+    audit_head: tuple[int, str] | None,
+) -> list[str]:
+    """Compare live ledger tables with state_to_rows.
+
+    Read only. Never commits or rolls back. An empty chain is represented by
+    audit_head None; its expected content is zero rows in all five tables.
+    """
+    if not isinstance(state, LedgerState):
+        raise LedgerUsageError("state must be a LedgerState")
+    if audit_head is None:
+        if state.runs:
+            raise LedgerUsageError("empty-chain head contradicts a non-empty state")
+        expected = {name: [] for name in COLUMNS}
+    else:
+        _validate_projection_head(audit_head)
+        expected = state_to_rows(state, audit_head)
+    try:
+        tables, storage_problems = _read_tables(conn)
+    except _BusyDatabase as exc:
+        cause = exc.__cause__
+        if isinstance(cause, sqlite3.Error):
+            raise cause
+        raise
+    problems = list(storage_problems)
+    for name in COLUMNS:
+        if name in tables:
+            problems.extend(_compare_table(name, expected[name], tables[name]))
+    return problems
+
+
+def projection_is_empty(conn: sqlite3.Connection) -> bool:
+    """True only when all five tables exist and all hold zero rows.
+
+    Read only. Never commits or rolls back. Only a missing table gives False;
+    any other sqlite error propagates unchanged.
+    """
+    for name in COLUMNS:
+        try:
+            row = conn.execute(f"SELECT 1 FROM {name} LIMIT 1").fetchone()
+        except sqlite3.OperationalError as exc:
+            if "no such table" in str(exc).lower():
+                return False
+            raise
+        if row is not None:
+            return False
+    return True
+
+
+def apply_state(
+    conn: sqlite3.Connection,
+    state: LedgerState,
+    audit_head: tuple[int, str],
+) -> None:
+    """Upsert state_to_rows into the five ledger tables.
+
+    No commit, no rollback: the caller owns the transaction and must have
+    ensured the schema and checked projection_problems for the pre-event state.
+    The caller also owns that state is the replay of a verified chain up to
+    exactly audit_head. It never deletes rows.
+    """
+    if not conn.in_transaction:
+        raise LedgerUsageError("apply_state requires an active transaction")
+    if not isinstance(state, LedgerState):
+        raise LedgerUsageError("state must be a LedgerState")
+    _validate_projection_head(audit_head)
+    rows = state_to_rows(state, audit_head)
+    for table in COLUMNS:
+        statement = UPSERT_SQL[table]
+        for row in rows[table]:
+            conn.execute(statement, row)
+
+
+class LedgerBootstrapRequired(LedgerError):
+    """The audit chain has events but the ledger projection tables are empty."""
+
+
+def _replay_prefix(rows):
+    """Replay chain rows through next_state; report a failure like verify_ledger."""
+    state = LedgerState()
+    for seq, _event_id, _prev_hash, _event_hash, payload in rows:
+        try:
+            event = control.event_from_payload(json.loads(payload), f"seq {seq}")
+            state = next_state(state, event)
+        except (TypeError, ValueError) as exc:
+            raise LedgerProjectionMismatch([f"seq {seq}: {exc}"]) from exc
+    head = (rows[-1][0], rows[-1][3]) if rows else None
+    return state, head
+
+
+class LedgerProjection:
+    """Single-use participant that keeps the ledger tables equal to the chain.
+
+    Control calls start, applied, already_applied and finalize inside one open
+    audit transaction. This class never begins, commits or rolls back. It reads
+    the committed chain only after control has verified it (the first applied or
+    already_applied call), advances the pure ledger state per inserted event,
+    and writes the final state once in finalize.
+    """
+
+    def __init__(self) -> None:
+        self._used = False
+        self._conn: sqlite3.Connection | None = None
+        self._dead = False
+        self._ready = False
+        self._base_state: LedgerState | None = None
+        self._base_head: tuple[int, str] | None = None
+        self._state: LedgerState | None = None
+        self._last: tuple[int, str] | None = None
+        self._pending_ids: set[str] = set()
+
+    def start(self, conn: sqlite3.Connection) -> None:
+        if self._used:
+            raise LedgerUsageError("ledger projection participant already used")
+        self._used = True
+        self._conn = conn
+
+    def _live_conn(self) -> sqlite3.Connection:
+        if self._conn is None:
+            raise LedgerUsageError("ledger projection participant was not started")
+        if self._dead:
+            raise LedgerUsageError("ledger projection participant already failed")
+        return self._conn
+
+    def _prepare(self, conn: sqlite3.Connection, prefix) -> None:
+        ensure_schema(conn)
+        state, head = _replay_prefix(prefix)
+        if prefix and projection_is_empty(conn):
+            raise LedgerBootstrapRequired(
+                f"audit chain has {len(prefix)} events but the ledger tables are empty"
+            )
+        problems = projection_problems(conn, state, head)
+        if problems:
+            raise LedgerProjectionMismatch(problems)
+        self._base_state = state
+        self._base_head = head
+        self._ready = True
+
+    def applied(self, stored: control.StoredEvent, result: control.AppendResult) -> None:
+        conn = self._live_conn()
+        try:
+            event = control.event_from_payload(
+                json.loads(stored.payload), f"seq {stored.seq}"
+            )
+            if not self._ready:
+                rows, _head = _read_audit(conn)
+                if not rows or rows[-1][0] != stored.seq or rows[-1][3] != stored.event_hash:
+                    raise LedgerUsageError("stored event is not the last audit row")
+                prefix = [row for row in rows if row[0] < stored.seq]
+                expected_prev = prefix[-1][3] if prefix else None
+                if stored.prev_hash != expected_prev:
+                    raise LedgerUsageError("stored event does not extend the prefix")
+                self._prepare(conn, prefix)
+                state = self._base_state
+            else:
+                if self._last is None or (
+                    stored.seq != self._last[0] + 1 or stored.prev_hash != self._last[1]
+                ):
+                    raise LedgerUsageError("stored event does not extend the last event")
+                if stored.event_id in self._pending_ids:
+                    raise LedgerUsageError("stored event id was already applied")
+                state = self._state
+            self._state = next_state(state, event)
+            self._last = (stored.seq, stored.event_hash)
+            self._pending_ids.add(stored.event_id)
+        except BaseException:
+            self._dead = True
+            raise
+
+    def already_applied(self, event: control.AuditEvent, result: control.AppendResult) -> None:
+        conn = self._live_conn()
+        self._dead = True
+        if not self._ready:
+            rows, _head = _read_audit(conn)
+            self._prepare(conn, rows)
+
+    def finalize(self) -> None:
+        conn = self._live_conn()
+        self._dead = True
+        if self._last is None:
+            return
+        row = conn.execute(
+            "SELECT seq, event_hash FROM audit_head WHERE singleton = 1"
+        ).fetchone()
+        if row is None or (row[0], row[1]) != self._last:
+            raise LedgerProjectionMismatch(
+                ["audit head differs from the last applied event"]
+            )
+        apply_state(conn, self._state, (row[0], row[1]))

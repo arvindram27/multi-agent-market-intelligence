@@ -1490,6 +1490,21 @@ class TransactionAborted(RuntimeError):
     """The transaction was aborted by an idempotent re-read; the handle is dead."""
 
 
+class ProjectionRejected(ValueError):
+    """Base class for deterministic rule rejections raised by a projection."""
+
+
+@dataclass(frozen=True)
+class StoredEvent:
+    """The audit row just inserted in the open transaction (uncommitted)."""
+
+    seq: int
+    event_id: str
+    prev_hash: str | None
+    event_hash: str
+    payload: str
+
+
 def _strip_chain_fields(payload: Mapping[str, Any]) -> dict[str, Any]:
     return {
         key: value
@@ -1611,9 +1626,14 @@ class AuditStore:
         )
         return AppendResult("applied", digest)
 
-    def transaction(self) -> "AuditTransaction":
-        """Open one gatekeeper-owned write transaction on this connection."""
-        return AuditTransaction(self)
+    def transaction(self, projection: Any = None) -> "AuditTransaction":
+        """Open one gatekeeper-owned write transaction on this connection.
+
+        ``projection`` is an optional single-use participant. When it is None
+        the transaction does not touch any participant code. See
+        AuditTransaction for the four methods control calls on a participant.
+        """
+        return AuditTransaction(self, projection)
 
     def append(self, event: AuditEvent) -> str:
         """Append one event in its own transaction (published behavior).
@@ -1668,12 +1688,24 @@ class AuditStore:
 
 
 class AuditTransaction:
-    """One write transaction; poisoned after an idempotent re-read."""
+    """One write transaction; poisoned after an idempotent re-read.
 
-    def __init__(self, store: AuditStore):
+    An optional participant (``projection``) is called by control, under the
+    process lock and inside the open transaction, exactly as follows:
+    ``start(conn)`` once after BEGIN IMMEDIATE; ``applied(stored, result)`` once
+    per inserted event, in insertion order, before append_in_tx returns;
+    ``already_applied(event, result)`` instead of ``applied`` for a duplicate,
+    before the transaction is rolled back; ``finalize()`` once on a normal exit
+    of a transaction that was not aborted (also with zero appends), before
+    COMMIT and outside the COMMIT error handling. A rollback is "confirmed"
+    only when the ROLLBACK statement itself ran successfully.
+    """
+
+    def __init__(self, store: AuditStore, projection: Any = None):
         self._store = store
         self._conn = store._conn
         self._lock = _APPEND_LOCK
+        self._projection = projection
         self._lock.acquire()
         try:
             self._conn.execute("BEGIN IMMEDIATE")
@@ -1685,7 +1717,34 @@ class AuditTransaction:
             ) from exc
         self._aborted = False
         self._closed = False
+        self._rollback_ok = True
         self.result: AppendResult | None = None
+        if projection is not None:
+            try:
+                projection.start(self._conn)
+            except Exception as exc:
+                rolled_back = _rollback(self._conn)
+                self._closed = True
+                self._lock.release()
+                error = self._projection_failure(exc, rolled_back)
+                if error is exc:
+                    raise
+                raise error from exc
+
+    @staticmethod
+    def _projection_failure(exc: Exception, rolled_back: bool) -> Exception:
+        """Return the exception to raise for a participant failure."""
+        if not rolled_back:
+            return ControlUnavailable(
+                "projection failed and rollback could not be confirmed",
+                append_state="unknown",
+            )
+        if isinstance(exc, sqlite3.Error):
+            return ControlUnavailable(
+                "projection failed before commit",
+                append_state="known_rolled_back",
+            )
+        return exc
 
     def _ensure_open(self) -> None:
         if self._closed:
@@ -1693,13 +1752,37 @@ class AuditTransaction:
         if self._aborted:
             raise TransactionAborted("transaction was aborted by an idempotent re-read")
 
-    def _abort(self) -> None:
+    def _abort(self) -> bool:
+        """Roll back once. True only when the ROLLBACK statement succeeded."""
         if not self._aborted:
-            try:
-                self._conn.execute("ROLLBACK")
-            except Exception:
-                pass
+            self._rollback_ok = _rollback(self._conn)
             self._aborted = True
+        return self._rollback_ok
+
+    def _raise_after_projection_failure(self, exc: Exception) -> None:
+        error = self._projection_failure(exc, self._abort())
+        if error is exc:
+            raise exc
+        raise error from exc
+
+    def _raise_checked(self, error: Exception) -> None:
+        """Roll back, then raise error; unconfirmed rollback gives unknown."""
+        if not self._abort():
+            raise ControlUnavailable(
+                "audit transaction rollback could not be confirmed",
+                append_state="unknown",
+            ) from error
+        raise error
+
+    def _read_stored(self, event: AuditEvent, result: AppendResult) -> StoredEvent:
+        row = self._conn.execute(
+            "SELECT seq, event_id, prev_hash, event_hash, payload "
+            "FROM audit_events WHERE event_id = ?",
+            (event.event_id,),
+        ).fetchone()
+        if row is None or row[3] != result.event_hash:
+            raise AuditIncomplete("stored audit row does not match the append result")
+        return StoredEvent(row[0], row[1], row[2], row[3], row[4])
 
     def append_in_tx(self, event: AuditEvent) -> AppendResult:
         """Append inside the open transaction, with idempotent re-read."""
@@ -1709,16 +1792,31 @@ class AuditTransaction:
         try:
             result = self._store._append_in_tx(event, idempotent=True)
         except _BrokenChain as exc:
-            self._abort()
-            raise AuditIncomplete(
+            error = AuditIncomplete(
                 "refusing to extend a broken audit chain: " + "; ".join(exc.problems)
-            ) from exc
-        except Exception:
-            self._abort()
-            raise
+            )
+            error.__cause__ = exc
+            self._raise_checked(error)
+        except Exception as exc:
+            self._raise_checked(exc)
         if result.status == "already_applied":
+            if self._projection is not None:
+                try:
+                    self._projection.already_applied(event, result)
+                except Exception as exc:
+                    self._raise_after_projection_failure(exc)
             self.result = result
-            self._abort()
+            if not self._abort():
+                raise ControlUnavailable(
+                    "audit transaction rollback could not be confirmed",
+                    append_state="unknown",
+                )
+        elif self._projection is not None:
+            try:
+                stored = self._read_stored(event, result)
+                self._projection.applied(stored, result)
+            except Exception as exc:
+                self._raise_after_projection_failure(exc)
         return result
 
     def head(self) -> tuple[int, str] | None:
@@ -1733,30 +1831,41 @@ class AuditTransaction:
     def __exit__(self, exc_type, exc, tb) -> bool:
         if self._closed:
             return False
-        if self._aborted:
-            self._closed = True
-            self._lock.release()
-            return False
         try:
+            if self._aborted:
+                if exc_type is None and not self._rollback_ok:
+                    raise ControlUnavailable(
+                        "audit transaction rollback could not be confirmed",
+                        append_state="unknown",
+                    )
+                return False
             if exc_type is not None:
-                self._conn.execute("ROLLBACK")
-            else:
-                self._conn.execute("COMMIT")
-        except Exception as commit_exc:
+                if not _rollback(self._conn):
+                    raise ControlUnavailable(
+                        "audit transaction rollback could not be confirmed",
+                        append_state="unknown",
+                    )
+                return False
+            if self._projection is not None:
+                try:
+                    self._projection.finalize()
+                except Exception as hook_exc:
+                    error = self._projection_failure(hook_exc, _rollback(self._conn))
+                    if error is hook_exc:
+                        raise
+                    raise error from hook_exc
             try:
-                self._conn.execute("ROLLBACK")
-            except Exception:
-                pass
-            self._closed = True
-            self._lock.release()
-            raise ControlUnavailable(
-                "audit commit outcome is unknown",
-                append_state="unknown",
-            ) from commit_exc
+                self._conn.execute("COMMIT")
+            except Exception as commit_exc:
+                _rollback(self._conn)
+                raise ControlUnavailable(
+                    "audit commit outcome is unknown",
+                    append_state="unknown",
+                ) from commit_exc
+            return False
         finally:
             self._closed = True
             self._lock.release()
-        return False
 
 
 def verify_chain(path: str | Path) -> list[str]:
