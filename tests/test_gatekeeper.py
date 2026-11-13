@@ -1072,3 +1072,550 @@ def test_sqlite_error_with_a_failed_rollback_is_unknown(tmp_path, needle):
     if real.in_transaction:
         real.execute("ROLLBACK")  # test-internal cleanup of its own connection
     verify(store)
+
+
+# ============================================================ G2a: approval and fetch
+
+
+def freq(host="example.com", **kw):
+    values = dict(host=host, max_bytes=1000, timeout_seconds=10, max_redirects=3)
+    values.update(kw)
+    return adm.FetchRequest(**values)
+
+
+def run_state(store):
+    rows = store._conn.execute("SELECT payload FROM audit_events ORDER BY seq").fetchall()
+    events = [control.event_from_payload(json.loads(row[0])) for row in rows]
+    return ledger.replay_events(events).runs["run-1"]
+
+
+def expire(clock):
+    clock.adv(301)
+
+
+# ---- approval
+
+
+def test_approve_records_one_target_under_the_live_lease(tmp_path):
+    store, clock, gate = boot(tmp_path)
+    clock.adv(5)
+    approval = eid()
+    result = gate.approve("target-1", approval)
+    assert result.status == "applied"
+    event = last_event(store)
+    assert event.event_kind == "run_approved" and event.operation == "run"
+    assert event.approved_target_id == "target-1"
+    assert (event.lease_owner, event.lease_epoch) == (OWNER_A, 1)
+    assert datetime.fromisoformat(event.observed_now) == T0 + timedelta(seconds=5)
+    assert run_state(store).approved_target == "target-1"
+    status = gate.event_status(approval)
+    assert status.state == "present" and status.approved_target_id == "target-1"
+    assert (status.lease_owner, status.lease_epoch) == (OWNER_A, 1)
+    verify(store)
+
+
+def test_second_approval_with_a_new_event_id_is_refused_even_for_the_same_target(tmp_path):
+    store, clock, gate = boot(tmp_path)
+    gate.approve("target-1", eid())
+    rows = count(store)
+    for target in ("target-1", "target-2"):
+        with pytest.raises(GatekeeperStateError):
+            gate.approve(target, eid())
+    assert count(store) == rows and run_state(store).approved_target == "target-1"
+    verify(store)
+
+
+def test_approval_duplicate_is_confirmed_without_a_clock_and_a_different_target_is_refused(tmp_path, no_system_clock):
+    store, clock, gate = boot(tmp_path)
+    clock.adv(1)
+    approval = eid()
+    first = gate.approve("target-1", approval)
+    clock.adv(1)
+    gate.admit_fetch(freq(), eid())
+    expire(clock)
+    silence(gate)
+    rows = count(store)
+    again = gate.approve("target-1", approval)
+    assert again.status == "already_applied" and again.event_hash == first.event_hash
+    with pytest.raises(control.AuditIncomplete):
+        gate.approve("target-2", approval)
+    assert count(store) == rows
+    verify(store)
+
+
+def test_approval_duplicate_by_another_owner_is_refused(tmp_path):
+    store, clock, gate = boot(tmp_path)
+    approval = eid()
+    gate.approve("target-1", approval)
+    rows = count(store)
+    with pytest.raises(GatekeeperRequestError):
+        other(store, clock, owner_id=OWNER_B).approve("target-1", approval)
+    assert count(store) == rows
+
+
+def test_approval_needs_a_live_lease_owned_by_the_caller(tmp_path):
+    store, clock, gate = make(tmp_path)
+    gate.start_run(eid())
+    with pytest.raises(GatekeeperLeaseError):
+        gate.approve("target-1", eid())
+    gate.acquire_lease(eid())
+    rows = count(store)
+    with pytest.raises(GatekeeperLeaseError):
+        other(store, clock, owner_id=OWNER_B).approve("target-1", eid())
+    expire(clock)
+    with pytest.raises(GatekeeperLeaseError):
+        gate.approve("target-1", eid())
+    assert count(store) == rows and run_state(store).approved_target is None
+    verify(store)
+
+
+@pytest.mark.parametrize(
+    "target", ["", " x", "x ", "x" * 129, "a\nb", "a\x00b", None, 5, b"x"]
+)
+def test_approval_rejects_unstorable_target_ids_before_append(tmp_path, target):
+    store, clock, gate = boot(tmp_path)
+    rows = count(store)
+    with pytest.raises(GatekeeperRequestError):
+        gate.approve(target, eid())
+    assert count(store) == rows
+
+
+def test_approval_accepts_a_128_character_target(tmp_path):
+    store, clock, gate = boot(tmp_path)
+    gate.approve("x" * 128, eid())
+    assert run_state(store).approved_target == "x" * 128
+    verify(store)
+
+
+def test_approval_unknown_run_policy_mismatch_and_clock(tmp_path):
+    store, clock, gate = boot(tmp_path)
+    rows = count(store)
+    with pytest.raises(GatekeeperUnknownRun):
+        other(store, clock, run_id="run-2").approve("t", eid())
+    with pytest.raises(GatekeeperPolicyMismatch):
+        other(store, clock, policy=cfg(max_fetches_per_run=9)).approve("t", eid())
+    clock.adv(-10)
+    with pytest.raises(GatekeeperClockError):
+        gate.approve("t", eid())
+    assert count(store) == rows
+
+
+# ---- fetch admission
+
+
+def test_fetch_allow_stores_the_normalized_host_and_uses_the_cap_at_decision(tmp_path):
+    store, clock, gate = boot(tmp_path, max_fetches_per_run=2)
+    clock.adv(1)
+    first = gate.admit_fetch(freq("Example.COM"), eid())
+    assert first.decision.allow and first.decision.reason is adm.AdmissionReason.ALLOWED
+    event = last_event(store)
+    assert (event.event_kind, event.operation, event.decision) == ("decision", "fetch", "allow")
+    assert event.target_host == "example.com" and event.reason_code == "allowed"
+    assert event.reserve_tokens is None and event.serialized_body_token_count is None
+    assert run_state(store).fetch_count == 1
+    gate.admit_fetch(freq("b.example.com"), eid())
+    assert run_state(store).fetch_count == 2
+    denied = gate.admit_fetch(freq("c.example.com"), eid())
+    assert not denied.decision.allow and denied.decision.reason is adm.AdmissionReason.BUDGET_EXCEEDED
+    event = last_event(store)
+    assert event.decision == "deny" and event.reason_code == "budget_exceeded"
+    assert event.target_host == "c.example.com"
+    assert run_state(store).fetch_count == 2
+    verify(store)
+
+
+@pytest.mark.parametrize(
+    "host", ["a_b.com", "a.com.", "-a.com", "host:80", "http://x", "a b", "a/b", "a@b", "a?b", "a#b", "a\\b"]
+)
+def test_fetch_with_a_host_that_cannot_be_stored_is_denied_without_a_host(tmp_path, host):
+    store, clock, gate = boot(tmp_path)
+    result = gate.admit_fetch(freq(host), eid())
+    assert not result.decision.allow
+    assert result.decision.reason is adm.AdmissionReason.INVALID_TARGET
+    event = last_event(store)
+    assert event.decision == "deny" and event.reason_code == "invalid_target"
+    assert event.target_host is None
+    assert run_state(store).fetch_count == 0
+    verify(store)
+
+
+def test_unit_requests_the_admission_layer_cannot_build_never_reach_the_gatekeeper():
+    # admission.FetchRequest rejects these hosts at construction, so no deny event can exist for them.
+    for host in ("", " a.com", "a.com ", "a\x01b", "x" * 254):
+        with pytest.raises((TypeError, ValueError)):
+            freq(host)
+
+
+@pytest.mark.parametrize(
+    "kw",
+    [
+        dict(timeout_seconds=0),
+        dict(timeout_seconds=-1),
+        dict(timeout_seconds=float("nan")),
+        dict(timeout_seconds=float("inf")),
+        dict(max_bytes=0),
+        dict(max_redirects=-1),
+    ],
+)
+def test_fetch_with_bad_limits_is_denied_and_keeps_the_host(tmp_path, kw):
+    store, clock, gate = boot(tmp_path)
+    result = gate.admit_fetch(freq("Example.com", **kw), eid())
+    assert not result.decision.allow and result.decision.reason is adm.AdmissionReason.INVALID_TARGET
+    event = last_event(store)
+    assert event.reason_code == "invalid_target" and event.target_host == "example.com"
+    assert run_state(store).fetch_count == 0
+    verify(store)
+
+
+HOST_CASES = [
+    "example.com", "Example.COM", "a.b.c", "1.2.3.4", "999.999.999.999", "1.2.3", "01.2.3.4",
+    "xn--bcher-kva.example", "a-b.com", "-a.com", "a-.com", "a..b", ".a", "a.", "a_b", "a b",
+    "a:80", "a/b", "a@b", "a?b", "a#b", "a\\b", "http://a", "\u212a.com", "caf\u00e9.com",
+    "a" * 63 + ".com", "a" * 64 + ".com", ("a" * 60 + ".") * 4 + "com", "::1", "[::1]", "x",
+]
+
+
+@pytest.mark.parametrize("host", HOST_CASES)
+def test_unit_host_rules_match_between_admission_and_control(tmp_path, host):
+    store, clock, gate = make(tmp_path)
+    try:
+        request = freq(host)
+    except (TypeError, ValueError):
+        return
+    storable = gate._stored_host(request.host) is not None
+    assert adm._host_is_syntactic(request.host) == storable
+
+
+def test_unit_a_kelvin_sign_host_is_stored_as_ascii_lowercase(tmp_path):
+    # Admission and control both lowercase first, so the stored host can differ from the caller's string.
+    store, clock, gate = boot(tmp_path)
+    gate.admit_fetch(freq("\u212a.com"), eid())
+    assert last_event(store).target_host == "k.com"
+
+
+def test_unit_an_allowed_fetch_whose_host_cannot_be_stored_is_refused(tmp_path, monkeypatch):
+    store, clock, gate = boot(tmp_path)
+    monkeypatch.setattr(Gatekeeper, "_stored_host", staticmethod(lambda host: None))
+    rows = count(store)
+    with pytest.raises(GatekeeperRequestError):
+        gate.admit_fetch(freq(), eid())
+    assert count(store) == rows
+
+
+def test_fetch_duplicate_is_rebuilt_from_the_state_before_the_stored_event(tmp_path, no_system_clock):
+    store, clock, gate = boot(tmp_path, max_fetches_per_run=1)
+    first_id = eid()
+    clock.adv(1)
+    first = gate.admit_fetch(freq(), first_id)
+    clock.adv(1)
+    assert not gate.admit_fetch(freq("b.example.com"), eid()).decision.allow
+    expire(clock)
+    silence(gate)
+    rows = count(store)
+    again = gate.admit_fetch(freq(), first_id)
+    assert again.status == "already_applied" and again.decision.allow
+    assert again.event_hash == first.event_hash and count(store) == rows
+    verify(store)
+
+
+def test_fetch_duplicate_does_not_prove_the_request_is_unchanged(tmp_path):
+    store, clock, gate = boot(tmp_path)
+    denied_id, allowed_id = eid(), eid()
+    gate.admit_fetch(freq("a_b.com"), denied_id)
+    gate.admit_fetch(freq("good.example.com", max_bytes=1000), allowed_id)
+    rows = count(store)
+    # a different unstorable host, or different limits, hash to the same stored event: confirmed
+    assert gate.admit_fetch(freq("c_d.com"), denied_id).status == "already_applied"
+    assert gate.admit_fetch(freq("good.example.com", max_bytes=5, timeout_seconds=1, max_redirects=0), allowed_id).status == "already_applied"
+    # a different storable host differs in the stored event: refused
+    with pytest.raises(control.AuditIncomplete):
+        gate.admit_fetch(freq("other.example.com"), allowed_id)
+    assert count(store) == rows
+
+
+def test_fetch_refusals_write_nothing(tmp_path):
+    store, clock, gate = make(tmp_path)
+    with pytest.raises(GatekeeperUnknownRun):
+        gate.admit_fetch(freq(), eid())
+    gate.start_run(eid())
+    with pytest.raises(GatekeeperLeaseError):
+        gate.admit_fetch(freq(), eid())
+    gate.acquire_lease(eid())
+    rows = count(store)
+    for bad in (None, "example.com", req()):
+        with pytest.raises(GatekeeperRequestError):
+            gate.admit_fetch(bad, eid())
+    with pytest.raises(GatekeeperLeaseError):
+        other(store, clock, owner_id=OWNER_B).admit_fetch(freq(), eid())
+    with pytest.raises(GatekeeperPolicyMismatch):
+        other(store, clock, policy=cfg(max_fetches_per_run=9)).admit_fetch(freq(), eid())
+    clock.adv(-1)
+    with pytest.raises(GatekeeperClockError):
+        gate.admit_fetch(freq(), eid())
+    clock.adv(1)
+    expire(clock)
+    with pytest.raises(GatekeeperLeaseError):
+        gate.admit_fetch(freq(), eid())
+    assert count(store) == rows and run_state(store).fetch_count == 0
+    verify(store)
+
+
+def test_fetch_duplicate_by_another_owner_is_refused(tmp_path):
+    store, clock, gate = boot(tmp_path)
+    decision_id = eid()
+    gate.admit_fetch(freq(), decision_id)
+    with pytest.raises(GatekeeperRequestError):
+        other(store, clock, owner_id=OWNER_B).admit_fetch(freq(), decision_id)
+
+
+# ---- fetch outcome
+
+
+@pytest.mark.parametrize("result_class", sorted(control.RESULT_CLASSES))
+def test_fetch_outcome_records_the_decision_host_and_the_caller_result_class(tmp_path, result_class):
+    store, clock, gate = boot(tmp_path)
+    decision_id, outcome_id = eid(), eid()
+    gate.admit_fetch(freq("Fetch-Host.Example.ORG"), decision_id)
+    clock.adv(3)
+    result = gate.record_fetch_outcome(decision_id, result_class, outcome_id)
+    assert result.status == "applied" and result.decision is None
+    event = last_event(store)
+    assert (event.event_kind, event.operation, event.decision, event.reason_code) == (
+        "outcome", "fetch", "allow", "allowed",
+    )
+    assert event.target_host == "fetch-host.example.org" and event.result_class == result_class
+    assert event.references_event_id == decision_id and not event.counters
+    assert event.error_class is None
+    status = gate.event_status(outcome_id)
+    assert status.state == "present"
+    assert (status.result_class, status.target_host, status.references_event_id) == (
+        result_class, "fetch-host.example.org", decision_id,
+    )
+    verify(store)
+
+
+def test_fetch_outcome_can_carry_an_error_class_name(tmp_path):
+    store, clock, gate = boot(tmp_path)
+    decision_id, outcome_id = eid(), eid()
+    gate.admit_fetch(freq(), decision_id)
+    gate.record_fetch_outcome(decision_id, "network_error", outcome_id, error_class="market_intelligence.net.TransientFetchError")
+    assert last_event(store).error_class == "market_intelligence.net.TransientFetchError"
+    assert gate.event_status(outcome_id).error_class == "market_intelligence.net.TransientFetchError"
+    verify(store)
+
+
+def test_fetch_outcome_refusals_write_nothing(tmp_path):
+    store, clock, gate = boot(tmp_path, max_fetches_per_run=2)
+    llm_id, denied_id, capped_id, ok_id = eid(), eid(), eid(), eid()
+    gate.admit_llm(req(), llm_id)
+    gate.admit_fetch(freq("a_b.com"), denied_id)
+    gate.admit_fetch(freq(), ok_id)
+    gate.admit_fetch(freq("b.example.com"), eid())
+    assert not gate.admit_fetch(freq("c.example.com"), capped_id).decision.allow
+    rows = count(store)
+    for decision_id in (eid(), denied_id, capped_id, llm_id, "", None):
+        with pytest.raises(GatekeeperRequestError):
+            gate.record_fetch_outcome(decision_id, "ok", eid())
+    for bad in ("bogus", None, 5, "", "OK"):
+        with pytest.raises(GatekeeperRequestError):
+            gate.record_fetch_outcome(ok_id, bad, eid())
+    for bad in ("a b", "1x", "", 5, "a..b"):
+        with pytest.raises(GatekeeperRequestError):
+            gate.record_fetch_outcome(ok_id, "ok", eid(), error_class=bad)
+    assert count(store) == rows
+    gate.record_fetch_outcome(ok_id, "ok", eid())
+    rows = count(store)
+    with pytest.raises(GatekeeperRequestError):
+        gate.record_fetch_outcome(ok_id, "http_error", eid())
+    assert count(store) == rows
+    verify(store)
+
+
+def test_fetch_outcome_needs_a_live_lease_owned_by_the_caller(tmp_path):
+    store, clock, gate = boot(tmp_path)
+    decision_id = eid()
+    gate.admit_fetch(freq(), decision_id)
+    rows = count(store)
+    with pytest.raises(GatekeeperLeaseError):
+        other(store, clock, owner_id=OWNER_B).record_fetch_outcome(decision_id, "ok", eid())
+    with pytest.raises(GatekeeperUnknownRun):
+        other(store, clock, run_id="run-2").record_fetch_outcome(decision_id, "ok", eid())
+    with pytest.raises(GatekeeperPolicyMismatch):
+        other(store, clock, policy=cfg(max_fetches_per_run=9)).record_fetch_outcome(decision_id, "ok", eid())
+    clock.adv(-1)
+    with pytest.raises(GatekeeperClockError):
+        gate.record_fetch_outcome(decision_id, "ok", eid())
+    clock.adv(1)
+    expire(clock)
+    with pytest.raises(GatekeeperLeaseError):
+        gate.record_fetch_outcome(decision_id, "ok", eid())
+    assert count(store) == rows
+
+
+def test_fetch_outcome_duplicate_uses_the_state_before_the_stored_event(tmp_path, no_system_clock):
+    store, clock, gate = boot(tmp_path)
+    decision_id, outcome_id = eid(), eid()
+    clock.adv(1)
+    gate.admit_fetch(freq(), decision_id)
+    second_decision = eid()
+    gate.admit_fetch(freq("b.example.com"), second_decision)
+    clock.adv(1)
+    first = gate.record_fetch_outcome(decision_id, "timeout", outcome_id, error_class="TimeoutError")
+    clock.adv(1)
+    gate.admit_fetch(freq("c.example.com"), eid())
+    expire(clock)
+    silence(gate)
+    rows = count(store)
+    again = gate.record_fetch_outcome(decision_id, "timeout", outcome_id, error_class="TimeoutError")
+    assert again.status == "already_applied" and again.event_hash == first.event_hash
+    with pytest.raises(control.AuditIncomplete):
+        gate.record_fetch_outcome(decision_id, "ok", outcome_id, error_class="TimeoutError")
+    with pytest.raises(GatekeeperRequestError):
+        gate.record_fetch_outcome(eid(), "timeout", outcome_id)
+    with pytest.raises(GatekeeperRequestError):
+        gate.record_fetch_outcome(decision_id, "timeout", eid())  # a second outcome under a new id
+    with pytest.raises(GatekeeperRequestError):
+        gate.record_fetch_outcome(second_decision, "timeout", outcome_id)  # known allowed decision, wrong reference
+    assert count(store) == rows
+    verify(store)
+
+
+def test_a_second_owner_closes_an_earlier_fetch_decision_after_handover(tmp_path):
+    store, clock, gate = boot(tmp_path)
+    decision_id = eid()
+    gate.admit_fetch(freq(), decision_id)
+    expire(clock)
+    gate.release_lease(eid())
+    second = other(store, clock, owner_id=OWNER_B)
+    second.acquire_lease(eid())
+    outcome_id = eid()
+    assert second.record_fetch_outcome(decision_id, "unknown", outcome_id).status == "applied"
+    event = last_event(store)
+    assert (event.lease_owner, event.lease_epoch) == (OWNER_B, 2)
+    # the owner that made the decision can still confirm its own earlier event id; the second owner cannot
+    other_decision = eid()
+    rows = count(store)
+    with pytest.raises(GatekeeperRequestError):
+        second.admit_fetch(freq(), decision_id)
+    assert gate.admit_fetch(freq(), decision_id).status == "already_applied"
+    assert count(store) == rows and other_decision
+    verify(store)
+
+
+# ---- failure injection and clock for the new methods
+
+
+def _g2a_calls(gate, ids):
+    return {
+        "approve": lambda: gate.approve("target-1", ids["approve"]),
+        "fetch": lambda: gate.admit_fetch(freq(), ids["fetch"]),
+        "outcome": lambda: gate.record_fetch_outcome(ids["fetch"], "ok", ids["outcome"]),
+    }
+
+
+@pytest.mark.parametrize("method", ["approve", "fetch", "outcome"])
+@pytest.mark.parametrize("mode,expected", [("landed", "already_applied"), ("absent", "applied")])
+def test_unknown_commit_on_each_g2a_method_is_execute_or_confirm(tmp_path, method, mode, expected):
+    store, clock, gate = boot(tmp_path)
+    ids = {name: eid() for name in ("approve", "fetch", "outcome")}
+    calls = _g2a_calls(gate, ids)
+    if method == "outcome":
+        calls["fetch"]()
+    clock.adv(10)
+    real = store._conn
+    store._conn = Wrap(real, mode)
+    with pytest.raises(control.ControlUnavailable) as caught:
+        calls[method]()
+    assert caught.value.append_state == "unknown"
+    store._conn = real
+    key = {"approve": "approve", "fetch": "fetch", "outcome": "outcome"}[method]
+    assert gate.event_status(ids[key]).state == ("present" if mode == "landed" else "absent")
+    clock.adv(2)
+    assert calls[method]().status == expected
+    assert store._conn.execute(
+        "SELECT count(*) FROM audit_events WHERE event_id = ?", (ids[key],)
+    ).fetchone()[0] == 1
+    verify(store)
+
+
+@pytest.mark.parametrize("needle", [READ_CHAIN, INSERT_EVENT])
+@pytest.mark.parametrize("method", ["approve", "fetch", "outcome"])
+def test_sqlite_error_in_a_g2a_method_propagates_unchanged_after_a_confirmed_rollback(tmp_path, method, needle):
+    store, clock, gate = boot(tmp_path)
+    ids = {name: eid() for name in ("approve", "fetch", "outcome")}
+    calls = _g2a_calls(gate, ids)
+    if method == "outcome":
+        calls["fetch"]()
+    clock.adv(10)
+    real = store._conn
+    rows = count(store)
+    store._conn = FailOn(real, needle)
+    with pytest.raises(sqlite3.OperationalError, match="injected statement failure") as caught:
+        calls[method]()
+    assert not isinstance(caught.value, control.ControlUnavailable)
+    store._conn = real
+    assert count(store) == rows and real.in_transaction is False
+    verify(store)
+
+
+def test_each_new_g2a_event_reads_the_injected_clock_once_and_duplicates_never(tmp_path, no_system_clock):
+    clock = CountingClock()
+    store, _, gate = make(tmp_path, clock=clock)
+    gate.start_run(eid())
+    gate.acquire_lease(eid())
+    ids = {name: eid() for name in ("approve", "fetch", "deny", "outcome")}
+    steps = (
+        lambda: gate.approve("target-1", ids["approve"]),
+        lambda: gate.admit_fetch(freq(), ids["fetch"]),
+        lambda: gate.admit_fetch(freq("a_b.com"), ids["deny"]),
+        lambda: gate.record_fetch_outcome(ids["fetch"], "ok", ids["outcome"]),
+    )
+    for step in steps:
+        before = clock.reads
+        clock.adv(5)
+        step()
+        assert clock.reads == before + 1
+    reads, rows = clock.reads, count(store)
+    silence(gate)
+    for step in steps:
+        assert step().status == "already_applied"
+    for event_id in ids.values():
+        assert gate.event_status(event_id).state == "present"
+    assert clock.reads == reads and count(store) == rows
+    events = stored_events(store)[2:]
+    for index, event in enumerate(events):
+        stamped = T0 + timedelta(seconds=5 * (index + 1))
+        assert datetime.fromisoformat(event.recorded_at) == stamped
+        assert datetime.fromisoformat(event.observed_now) == stamped
+    verify(store)
+
+
+def test_event_status_reports_the_new_fields_and_stays_read_only(tmp_path):
+    store, clock, gate = boot(tmp_path)
+    ids = {name: eid() for name in ("approve", "fetch", "deny", "outcome")}
+    gate.approve("target-1", ids["approve"])
+    gate.admit_fetch(freq("Example.com"), ids["fetch"])
+    gate.admit_fetch(freq("a_b.com"), ids["deny"])
+    gate.record_fetch_outcome(ids["fetch"], "ok", ids["outcome"])
+    before = fingerprint_of_files(tmp_path)
+    rows = count(store)
+    assert gate.event_status(ids["deny"]).target_host is None
+    assert gate.event_status(ids["deny"]).reason_code == "invalid_target"
+    assert gate.event_status(ids["fetch"]).target_host == "example.com"
+    assert gate.event_status(ids["approve"]).approved_target_id == "target-1"
+    assert gate.event_status(ids["outcome"]).result_class == "ok"
+    assert gate.event_status(eid()).approved_target_id is None
+    assert fingerprint_of_files(tmp_path) == before and count(store) == rows
+
+
+def test_g2a_leaves_llm_admission_and_the_g1_surface_unchanged(tmp_path):
+    store, clock, gate = boot(tmp_path)
+    gate.approve("target-1", eid())
+    gate.admit_fetch(freq(), eid())
+    decision_id = eid()
+    result = gate.admit_llm(req(), decision_id)
+    assert result.decision.allow
+    gate.record_llm_outcome(decision_id, 98, 40, eid())
+    state = run_state(store)
+    assert state.fetch_count == 1 and state.calls == 1 and state.approved_target == "target-1"
+    verify(store)

@@ -1,4 +1,4 @@
-"""Gatekeeper for the H1 control layer (slice 2b-iii, first batch).
+"""Gatekeeper for the H1 control layer (slice 2b-iii, batches G1 and G2a).
 
 One Gatekeeper serves one run. Every public method that writes opens exactly one
 ``AuditStore.transaction(ledger.LedgerProjection())``, verifies the committed
@@ -43,7 +43,22 @@ Contract
   The bad values themselves are not kept.
 - The verified read replays the whole chain, and the participant replays it again
   on the first append, so each call is O(n) twice.
-- Fetch, write, approval, takeover and reconciliation are not in this batch.
+- G2a adds ``approve``, ``admit_fetch`` and ``record_fetch_outcome`` with the same
+  execute-or-confirm rules. ``approve`` records one explicit target id for the run
+  (a second approval with a new event id is refused, even for the same target). The
+  chain proves only that a lease owner recorded a target at a time; it does not
+  prove who approved or what they saw. ``admit_fetch`` applies the syntactic fetch
+  rules and the fetch cap; it does no DNS or SSRF check (net.py stays responsible).
+  An allowed fetch uses one unit of the cap at decision time, even if no outcome
+  follows. A denied fetch whose host cannot be stored carries no target_host, and
+  neither the rejected string nor max_bytes, timeout or redirects is stored, so a
+  duplicate event id with a different request is confirmed, not detected. A fetch
+  outcome takes the host from the decision and records a caller-supplied
+  result_class; the gatekeeper does not decide whether the fetch happened, and the
+  caller owns the mapping from net.py errors. Owner ids must be unique per worker
+  incarnation: lease checks compare owner strings, and nothing here fences an
+  external call already in flight across expiry.
+- Write, takeover and reconciliation are not in this batch.
 """
 from __future__ import annotations
 
@@ -114,6 +129,16 @@ class EventStatus:
     observed_now: str | None = None
     decision: str | None = None
     reason_code: str | None = None
+    target_host: str | None = None
+    result_class: str | None = None
+    error_class: str | None = None
+    approved_target_id: str | None = None
+    references_event_id: str | None = None
+    lease_owner: str | None = None
+    lease_epoch: int | None = None
+
+
+MAX_TARGET_ID_LEN = 128
 
 
 def _utc(value: str) -> datetime:
@@ -601,6 +626,145 @@ class Gatekeeper:
         }
         return reason, overrun, counters
 
+    # ------------------------------------------------- approval and fetch (G2a)
+
+    def _binding(self, run, stored, events):
+        """Return (observed_now, owner, epoch, recorded_at) for a NEW or a stored event."""
+        if stored is None:
+            now = self._stamp()
+            self._check_monotonic(now, events)
+            lease = self._owned_lease(run, now, require_unexpired=True)
+            stamp = now.isoformat()
+            return stamp, lease.owner_id, lease.epoch, stamp
+        if stored.lease_owner != self._owner:
+            raise GatekeeperRequestError("the stored event belongs to another lease owner")
+        return stored.observed_now, stored.lease_owner, stored.lease_epoch, stored.recorded_at
+
+    @staticmethod
+    def _checked_text(value: object, name: str) -> str:
+        if (
+            not isinstance(value, str)
+            or not value
+            or value != value.strip()
+            or len(value) > MAX_TARGET_ID_LEN
+            or any(ord(char) < 32 for char in value)
+        ):
+            raise GatekeeperRequestError(
+                f"{name} must be a trimmed string of 1 to {MAX_TARGET_ID_LEN} characters without control characters"
+            )
+        return value
+
+    @staticmethod
+    def _stored_host(host: str) -> str | None:
+        """The host exactly as control would store it, or None when control would reject it."""
+        try:
+            return control._normalized_host(host)
+        except ValueError:
+            return None
+
+    def approve(self, approved_target_id: str, event_id: str) -> GatekeeperResult:
+        target = self._checked_text(approved_target_id, "approved_target_id")
+
+        def build(state, prior, events, stored):
+            run = self._run_of(state)
+            if stored is None and run.approved_target is not None:
+                raise GatekeeperStateError("the run already has an approval")
+            observed, owner, epoch, recorded = self._binding(run, stored, events)
+            event = self._event(
+                recorded,
+                event_id=event_id,
+                operation="run",
+                event_kind="run_approved",
+                decision="allow",
+                reason_code="allowed",
+                counters={},
+                approved_target_id=target,
+                lease_owner=owner,
+                lease_epoch=epoch,
+                observed_now=observed,
+            )
+            return event, None
+
+        return self._execute(event_id, "run_approved", "run", build)
+
+    def admit_fetch(self, request: admission.FetchRequest, event_id: str) -> GatekeeperResult:
+        if not isinstance(request, admission.FetchRequest):
+            raise GatekeeperRequestError("request must be a FetchRequest")
+
+        def build(state, prior, events, stored):
+            run = self._run_of(state)
+            basis = self._run_of(prior)
+            decision = admission.decide_fetch(request, self._view(basis), self._policy)
+            host = self._stored_host(request.host)
+            if decision.allow and host is None:
+                raise GatekeeperRequestError("an allowed fetch has no storable host")
+            observed, owner, epoch, recorded = self._binding(run, stored, events)
+            event = self._event(
+                recorded,
+                event_id=event_id,
+                operation="fetch",
+                event_kind="decision",
+                decision="allow" if decision.allow else "deny",
+                reason_code=decision.reason.value,
+                counters={},
+                target_host=host,
+                lease_owner=owner,
+                lease_epoch=epoch,
+                observed_now=observed,
+                **self._policy_fields(),
+            )
+            return event, decision
+
+        return self._execute(event_id, "decision", "fetch", build)
+
+    def record_fetch_outcome(
+        self,
+        decision_event_id: str,
+        result_class: str,
+        event_id: str,
+        error_class: str | None = None,
+    ) -> GatekeeperResult:
+        if not isinstance(decision_event_id, str) or not decision_event_id:
+            raise GatekeeperRequestError("decision_event_id must be a non-empty string")
+        if not isinstance(result_class, str) or result_class not in control.RESULT_CLASSES:
+            raise GatekeeperRequestError("result_class is not a known fetch result class")
+        if error_class is not None:
+            try:
+                control._error_class(error_class)
+            except (ValueError, TypeError) as exc:
+                raise GatekeeperRequestError("error_class must be a dotted exception class name") from exc
+
+        def build(state, prior, events, stored):
+            run = self._run_of(state)
+            basis = self._run_of(prior)
+            if stored is not None and stored.references_event_id != decision_event_id:
+                raise GatekeeperRequestError("event_id references a different decision")
+            decision = basis.decisions.get(decision_event_id)
+            if decision is None or not decision.allow or decision.operation != "fetch":
+                raise GatekeeperRequestError("the decision is not a known allowed fetch decision")
+            if decision_event_id in basis.normal_outcomes:
+                raise GatekeeperRequestError("the decision already has an outcome")
+            observed, owner, epoch, recorded = self._binding(run, stored, events)
+            event = self._event(
+                recorded,
+                event_id=event_id,
+                operation="fetch",
+                event_kind="outcome",
+                decision="allow",
+                reason_code="allowed",
+                counters={},
+                target_host=decision.target_host,
+                result_class=result_class,
+                error_class=error_class,
+                references_event_id=decision_event_id,
+                lease_owner=owner,
+                lease_epoch=epoch,
+                observed_now=observed,
+            )
+            return event, None
+
+        return self._execute(event_id, "outcome", "fetch", build)
+
     # ---------------------------------------------------------- event status
 
     def event_status(self, event_id: str) -> EventStatus:
@@ -685,5 +849,12 @@ class Gatekeeper:
                     event.observed_now,
                     event.decision,
                     event.reason_code,
+                    target_host=event.target_host,
+                    result_class=event.result_class,
+                    error_class=event.error_class,
+                    approved_target_id=event.approved_target_id,
+                    references_event_id=event.references_event_id,
+                    lease_owner=event.lease_owner,
+                    lease_epoch=event.lease_epoch,
                 )
         return EventStatus("absent")
