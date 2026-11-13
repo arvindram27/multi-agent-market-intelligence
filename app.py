@@ -165,14 +165,21 @@ if state:
         st.warning(warning)
     if status == "persist_failed":
         detail = state.get("error") or ""
-        st.error(f"Persistence failed — no rows were committed. {detail}".strip())
+        st.error(
+            "Persistence failed. The detail below says what is known about "
+            "this attempt. Another writer may have stored a matching "
+            "snapshot; check the stored runs before repeating anything. "
+            f"{detail}".strip()
+        )
     elif status == "persist_unknown":
         detail = state.get("error") or ""
         st.warning(
-            "Persistence outcome unknown — the snapshot may or may not have "
+            "Persistence outcome unknown - the snapshot may or may not have "
             "been committed. Re-persisting the unchanged snapshot (same run id "
-            "and content hash) is safe and deduplicated; changed content is "
-            f"stored as a new version. {detail}".strip(),
+            "and content hash) is expected to be refused by the database's "
+            "unique rule, which is not a guarantee for this database. Check "
+            "the stored runs first. Changed content is stored as a new "
+            f"version. {detail}".strip(),
             icon="⚠️",
         )
     elif state.get("error"):

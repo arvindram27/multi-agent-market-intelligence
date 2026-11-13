@@ -27,10 +27,12 @@ class PersistenceNotConfigured(PersistenceError):
 class CommitOutcomeUnknown(PersistenceError):
     """The commit may or may not have landed.
 
-    Reconciliation could not observe a matching snapshot, but absence is not
-    proof that the original transaction will not commit. Re-persisting the
-    *unchanged* snapshot (same ``run_id`` and ``content_hash``) is safe because
-    it is deduplicated; changed content is stored as a new version.
+    Reconciliation could not confirm a matching snapshot, but absence is not
+    proof that the original transaction will not commit. The unique rule on
+    (``run_id``, ``content_hash``) is expected to refuse a second insert of the
+    *unchanged* snapshot, but that is not a guarantee for a particular
+    database; the stored runs should be checked first. Changed content is
+    stored as a new version.
     """
 
 

@@ -9,8 +9,8 @@ and release it; that is not used here.)
 
 Failure classification follows the transaction phase that was actually reached:
 
-* the connection could not be opened -> no transaction started, so nothing was
-  written (known failure);
+* the connection could not be opened -> no transaction started, so this attempt
+  wrote nothing (known failure);
 * the transaction body failed and psycopg rolled it back, and the connection
   reports no open transaction afterwards -> no commit was issued (known
   failure, with the rollback named in the message);
@@ -19,10 +19,12 @@ Failure classification follows the transaction phase that was actually reached:
   original transaction cannot still commit; it only means the row was not
   visible at that instant. Absence therefore stays ``persist_unknown``.
 
-Re-persisting the *unchanged* snapshot (same ``run_id``, same ``content_hash``)
-is deduplicated by the unique constraint. Changed business content is stored as
-a new version. The writer never mutates ``state`` and never regenerates
-provenance values or the hash, so a retry reuses the frozen snapshot.
+The unique constraint on (``run_id``, ``content_hash``) is expected to refuse a
+second insert of the *unchanged* snapshot. That is expected behaviour, not a
+guarantee for a particular database. Changed business content is stored as a
+new version. The writer never mutates ``state`` and never regenerates
+provenance values or the hash. A confirmed rollback proves only that this
+attempt stored nothing; another writer may have stored a matching snapshot.
 """
 from __future__ import annotations
 
@@ -184,8 +186,9 @@ def _dsn_secrets(dsn: str) -> tuple[str, ...]:
 class _TransactionAborted(Exception):
     """The transaction body failed and psycopg confirmed a rollback."""
 
-    def __init__(self, detail: str):
+    def __init__(self, detail: str, sqlstate: str | None = None):
         self.detail = detail
+        self.sqlstate = sqlstate
         super().__init__(detail)
 
 
@@ -356,7 +359,7 @@ class PostgresProfileWriter:
             safe = self._sanitize(exc)
             logger.error("Could not connect for run %s: %s", run_id, safe)
             raise PersistenceError(
-                "could not connect to the database; no rows were stored: " + safe
+                "could not connect to the database; this attempt wrote nothing: " + safe
             ) from None
 
         try:
@@ -367,9 +370,23 @@ class PostgresProfileWriter:
             logger.error(
                 "Write for run %s was rolled back: %s", run_id, aborted.detail
             )
+            # SQLSTATE 57014 means the server cancelled a statement. A
+            # statement timeout or a manual cancel can both produce it. The
+            # code alone does not identify the cause, or what (if anything)
+            # the statement was waiting for, so no cause is claimed.
+            cancelled = (
+                "The database cancelled a statement in this attempt "
+                "(SQLSTATE 57014; the statement_timeout setting was "
+                f"{self._statement_timeout_ms} ms). The cause is not "
+                "established. "
+                if aborted.sqlstate == "57014"
+                else ""
+            )
             raise PersistenceError(
-                "the database write failed and was rolled back; "
-                "no snapshot was stored: " + aborted.detail
+                "this write attempt was confirmed rolled back and stored "
+                "nothing. " + cancelled + "Another writer may have stored a "
+                "matching snapshot; check the stored runs before repeating "
+                "anything: " + aborted.detail
             ) from None
         except (psycopg.Error, OSError) as exc:
             # Any failure from COMMIT, or a rollback we could not confirm, is
@@ -389,11 +406,14 @@ class PostgresProfileWriter:
                 )
                 return run_id
             raise CommitOutcomeUnknown(
-                "the connection failed while a commit was in flight and no "
-                "matching snapshot was visible afterwards. The write may or may "
-                "not have been stored. Re-persisting the unchanged snapshot "
-                "(same run id and content hash) is safe and deduplicated; "
-                "changed content is stored as a new version. " + safe
+                "the write did not finish cleanly, and the database could not "
+                "confirm either a commit or a clean rollback. A check for a "
+                "matching snapshot did not confirm one (the check may not have "
+                "been able to run). The write may or may not have been stored. "
+                "The unique rule on (run_id, content_hash) is expected to refuse "
+                "a second insert of the unchanged snapshot, but that is not a "
+                "guarantee for this database; check the stored runs first. "
+                "Changed content is stored as a new version. " + safe
             ) from None
         finally:
             # Cleanup must never change an outcome that was already established.
@@ -490,7 +510,10 @@ class PostgresProfileWriter:
             if not _transaction_is_closed(conn):
                 raise
             if isinstance(body_error, (psycopg.Error, OSError)):
-                raise _TransactionAborted(self._sanitize(body_error)) from None
+                raise _TransactionAborted(
+                    self._sanitize(body_error),
+                    getattr(body_error, "sqlstate", None),
+                ) from None
             raise
         return outcome
 

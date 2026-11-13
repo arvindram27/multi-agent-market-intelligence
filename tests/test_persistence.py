@@ -6,6 +6,7 @@ import logging
 
 import psycopg
 import pytest
+from psycopg.pq import TransactionStatus
 from pydantic import SecretStr
 
 from market_intelligence.config import settings
@@ -333,3 +334,83 @@ def test_unknown_outcome_is_sanitized_and_qualified(sample_state, caplog):
     assert secret not in caplog.text
     assert dsn not in caplog.text
     assert all(record.exc_info is None for record in caplog.records)
+
+
+def _writer_whose_insert_fails(error, dsn=None):
+    """A writer whose INSERT raises ``error`` and whose rollback is confirmed."""
+
+    class _Transaction:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False  # the body error propagates after the rollback
+
+    class _Connection:
+        closed = False
+        broken = False
+
+        class info:
+            transaction_status = TransactionStatus.IDLE
+
+        def __init__(self):
+            self.calls = 0
+
+        def execute(self, sql, params=()):
+            self.calls += 1
+            if self.calls == 1:
+                return None  # SET LOCAL statement_timeout
+            raise error
+
+        def transaction(self):
+            return _Transaction()
+
+        def close(self):
+            self.closed = True
+
+    return PostgresProfileWriter(
+        dsn or "postgresql://market_intel:fake@127.0.0.1:1/db",  # pragma: allowlist secret
+        connection_factory=_Connection,
+    )
+
+
+def test_cancelled_statement_is_named_without_claiming_a_cause(sample_state):
+    secret = "fake-password-5b2c"  # pragma: allowlist secret
+    dsn = f"postgresql://market_intel:{secret}@127.0.0.1:5432/market_intelligence"
+    writer = _writer_whose_insert_fails(
+        psycopg.errors.QueryCanceled(
+            f"canceling statement due to statement timeout; conninfo {dsn}"
+        ),
+        dsn,
+    )
+
+    with pytest.raises(PersistenceError) as info:
+        writer.persist("run-1", sample_state())
+
+    message = str(info.value)
+    assert not isinstance(info.value, CommitOutcomeUnknown)
+    assert "confirmed rolled back" in message
+    assert "SQLSTATE 57014" in message
+    assert "5000 ms" in message
+    assert "The cause is not established" in message
+    assert "Another writer may have stored a matching snapshot" in message
+    assert "no snapshot was stored" not in message
+    assert secret not in message
+    assert dsn not in message
+    assert "waited" not in message
+    assert "waiting" not in message
+
+
+def test_other_database_errors_are_not_called_cancellations(sample_state):
+    writer = _writer_whose_insert_fails(
+        psycopg.errors.ForeignKeyViolation("child insert failed")
+    )
+
+    with pytest.raises(PersistenceError) as info:
+        writer.persist("run-1", sample_state())
+
+    message = str(info.value)
+    assert not isinstance(info.value, CommitOutcomeUnknown)
+    assert "confirmed rolled back" in message
+    assert "SQLSTATE 57014" not in message
+    assert "cancelled" not in message
