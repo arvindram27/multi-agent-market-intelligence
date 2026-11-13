@@ -2117,3 +2117,517 @@ def test_write_leaves_llm_fetch_and_approval_behaviour_unchanged(tmp_path):
     assert (state.calls, state.fetch_count, state.approved_target) == (1, 1, "target-1")
     assert state.reserved_tokens == 0 and write_id in state.decisions and write_id not in state.normal_outcomes
     verify(store)
+
+
+# ============================================================ G2c: lease takeover and llm reconciliation
+
+
+def lease_events(store):
+    return [event for event in stored_events(store) if event.event_kind.startswith("lease_")]
+
+
+def counting_boot(path, **policy):
+    clock = CountingClock()
+    store, clock, gate = make(path, clock=clock, **policy)
+    gate.start_run(eid())
+    gate.acquire_lease(eid())
+    return store, clock, gate
+
+
+def unknown_llm(path, kind="missing", **policy):
+    store, clock, gate = boot(path, **policy)
+    clock.adv(10)
+    decision_id = eid()
+    gate.admit_llm(req(), decision_id)
+    clock.adv(5)
+    unknown_id = eid()
+    prompt, completion = (None, None) if kind == "missing" else (-1, 5)
+    gate.record_llm_outcome(decision_id, prompt, completion, unknown_id)
+    return store, clock, gate, decision_id, unknown_id
+
+
+def taken_over(store, clock):
+    """Expire the live lease and let OWNER_B take it over; returns the second gatekeeper."""
+    expire(clock)
+    second = other(store, clock, owner_id=OWNER_B)
+    second.take_over_lease(eid())
+    clock.adv(1)
+    return second
+
+
+def test_takeover_of_an_expired_lease_by_a_different_owner(tmp_path):
+    store, clock, gate = boot(tmp_path)
+    first_lease = lease_events(store)[0]
+    expire(clock)
+    second = other(store, clock, owner_id=OWNER_B)
+    takeover_id = eid()
+    result = second.take_over_lease(takeover_id)
+    assert result.status == "applied" and result.decision is None
+    event = last_event(store)
+    assert (event.event_kind, event.operation, event.decision, event.reason_code) == (
+        "lease_taken_over", "run", "allow", "allowed",
+    )
+    assert (event.lease_owner, event.lease_epoch) == (OWNER_B, 2)
+    assert (event.previous_lease_owner, event.previous_lease_epoch) == (OWNER_A, 1)
+    assert event.references_event_id == first_lease.event_id
+    assert event.lease_ttl_seconds == 300 and not event.counters
+    assert _expires(event) == _expires(first_lease) + timedelta(seconds=301)
+    lease = run_state(store).lease
+    assert (lease.owner_id, lease.epoch, lease.released, lease.last_event_id) == (OWNER_B, 2, False, takeover_id)
+    verify(store)
+
+
+def _expires(event):
+    return datetime.fromisoformat(event.lease_expires_at)
+
+
+def test_takeover_is_allowed_exactly_at_expiry_and_refused_one_second_before(tmp_path):
+    store, clock, gate = boot(tmp_path)
+    clock.adv(299)
+    second = other(store, clock, owner_id=OWNER_B)
+    rows = count(store)
+    with pytest.raises(GatekeeperLeaseError, match="not expired"):
+        second.take_over_lease(eid())
+    assert count(store) == rows
+    clock.adv(1)  # now == expires_at
+    assert second.take_over_lease(eid()).status == "applied"
+    verify(store)
+
+
+def test_takeover_is_refused_for_the_current_owner_without_reading_the_clock(tmp_path):
+    store, clock, gate = counting_boot(tmp_path)
+    expire(clock)
+    rows, reads = count(store), clock.reads
+    with pytest.raises(GatekeeperLeaseError, match="different from the current lease owner"):
+        gate.take_over_lease(eid())
+    assert count(store) == rows and clock.reads == reads
+    verify(store)
+
+
+def test_takeover_needs_an_unreleased_lease_and_a_started_run(tmp_path):
+    store, clock, gate = boot(tmp_path)
+    expire(clock)
+    gate.release_lease(eid())  # a released lease is acquired, not taken over
+    second = other(store, clock, owner_id=OWNER_B)
+    rows = count(store)
+    with pytest.raises(GatekeeperLeaseError, match="no unreleased lease"):
+        second.take_over_lease(eid())
+    store2, clock2, gate2 = make(tmp_path / "nolease")
+    gate2.start_run(eid())
+    with pytest.raises(GatekeeperLeaseError, match="no unreleased lease"):
+        gate2.take_over_lease(eid())
+    store3, clock3, gate3 = make(tmp_path / "norun")
+    with pytest.raises(GatekeeperUnknownRun):
+        gate3.take_over_lease(eid())
+    assert count(store) == rows and count(store2) == 1 and count(store3) == 0
+
+
+def test_takeover_references_the_last_lease_event_even_when_it_is_a_renewal(tmp_path):
+    store, clock, gate = boot(tmp_path)
+    clock.adv(100)
+    renew_id = eid()
+    gate.renew_lease(renew_id)  # expires at T0+400
+    clock.adv(301)
+    second = other(store, clock, owner_id=OWNER_B)
+    second.take_over_lease(eid())
+    event = last_event(store)
+    assert event.references_event_id == renew_id and event.previous_lease_epoch == 1
+    assert event.lease_epoch == 2
+    verify(store)
+
+
+def test_a_takeover_can_follow_a_takeover(tmp_path):
+    store, clock, gate = boot(tmp_path)
+    second = taken_over(store, clock)
+    expire(clock)
+    third = other(store, clock, owner_id="00000000-0000-0000-0000-00000000000c")
+    third.take_over_lease(eid())
+    event = last_event(store)
+    assert (event.lease_epoch, event.previous_lease_owner, event.previous_lease_epoch) == (3, OWNER_B, 2)
+    assert event.references_event_id == lease_events(store)[1].event_id
+    with pytest.raises(GatekeeperLeaseError):
+        second.renew_lease(eid())
+    verify(store)
+
+
+def test_after_takeover_the_old_owner_is_locked_out_and_the_new_owner_acts(tmp_path):
+    store, clock, gate = boot(tmp_path)
+    second = taken_over(store, clock)
+    rows = count(store)
+    for call in (
+        lambda: gate.admit_llm(req(), eid()),
+        lambda: gate.renew_lease(eid()),
+        lambda: gate.release_lease(eid()),
+        lambda: gate.take_over_lease(eid()),
+    ):
+        with pytest.raises(GatekeeperLeaseError):
+            call()
+    assert count(store) == rows
+    assert second.admit_llm(req(), eid()).decision.allow
+    verify(store)
+
+
+def test_expiry_is_judged_only_by_the_new_owners_own_clock(tmp_path):
+    # Known limit: a fast clock in the new owner takes a lease that is live by the old owner's clock.
+    store, clock, gate = boot(tmp_path)
+    fast = other(store, Clock(T0 + timedelta(seconds=400)), owner_id=OWNER_B)
+    assert fast.take_over_lease(eid()).status == "applied"
+    clock.adv(400)
+    with pytest.raises(GatekeeperLeaseError, match="another owner"):
+        gate.admit_llm(req(), eid())  # the old owner is fenced from now on
+    verify(store)
+
+
+def test_takeover_duplicate_is_confirmed_without_a_clock_and_a_foreign_one_is_refused(tmp_path, no_system_clock):
+    store, clock, gate = boot(tmp_path)
+    expire(clock)
+    clock2 = CountingClock(clock())
+    second = other(store, clock2, owner_id=OWNER_B)
+    takeover_id = eid()
+    second.take_over_lease(takeover_id)
+    second.admit_llm(req(), eid())
+    clock2.adv(1000)
+    rows, reads = count(store), clock2.reads
+    assert second.take_over_lease(takeover_id).status == "already_applied"
+    assert count(store) == rows and clock2.reads == reads
+    third = other(store, clock2, owner_id="00000000-0000-0000-0000-00000000000c")
+    with pytest.raises(control.AuditIncomplete, match="different logical fingerprint"):
+        third.take_over_lease(takeover_id)
+    assert count(store) == rows
+    verify(store)
+
+
+def test_takeover_event_id_of_another_kind_is_refused(tmp_path):
+    store, clock, gate = boot(tmp_path)
+    clock.adv(10)
+    decision_id = eid()
+    gate.admit_llm(req(), decision_id)
+    expire(clock)
+    second = other(store, clock, owner_id=OWNER_B)
+    rows = count(store)
+    with pytest.raises(GatekeeperRequestError, match="different event kind"):
+        second.take_over_lease(decision_id)
+    with pytest.raises(GatekeeperRequestError):
+        second.take_over_lease("")
+    assert count(store) == rows
+
+
+def test_event_status_reports_a_takeover_event(tmp_path):
+    store, clock, gate = boot(tmp_path)
+    expire(clock)
+    second = other(store, clock, owner_id=OWNER_B)
+    takeover_id = eid()
+    second.take_over_lease(takeover_id)
+    status = second.event_status(takeover_id)
+    assert (status.state, status.event_kind, status.operation, status.run_matches) == (
+        "present", "lease_taken_over", "run", True,
+    )
+    assert (status.lease_owner, status.lease_epoch) == (OWNER_B, 2)
+    assert status.references_event_id == lease_events(store)[0].event_id
+
+
+def test_the_new_owner_records_outcomes_for_decisions_made_under_the_old_epoch(tmp_path):
+    store, clock, gate = boot(tmp_path)
+    clock.adv(10)
+    decision_id = eid()
+    gate.admit_llm(req(), decision_id)
+    second = taken_over(store, clock)
+    assert second.record_llm_outcome(decision_id, 98, 40, eid()).status == "applied"
+    event = last_event(store)
+    assert (event.lease_owner, event.lease_epoch, event.reason_code) == (OWNER_B, 2, "allowed")
+    assert run_state(store).reserved_tokens == 0
+    verify(store)
+
+
+def test_takeover_leaves_the_failed_write_rule_unchanged_and_that_unlocks_a_new_write(tmp_path):
+    # Known policy risk, pinned on purpose: the old worker may have written before it died, yet a
+    # reported "failed" from the new owner lets a new write through (G2b rule, unchanged in G2c).
+    store, clock, gate = approved(tmp_path)
+    first = eid()
+    assert gate.admit_write(wreq(), first).decision.allow
+    second = taken_over(store, clock)
+    with pytest.raises(GatekeeperStateError, match="no outcome"):
+        second.admit_write(wreq(), eid())  # still blocked until an outcome is recorded
+    second.record_write_outcome(first, "failed", eid())
+    assert second.admit_write(wreq(), eid()).decision.allow
+    verify(store)
+
+
+def test_takeover_does_not_clear_a_write_unknown_either(tmp_path):
+    store, clock, gate = approved(tmp_path)
+    first = eid()
+    gate.admit_write(wreq(), first)
+    gate.record_write_outcome(first, "unknown", eid())
+    second = taken_over(store, clock)
+    with pytest.raises(GatekeeperStateError, match="unknown"):
+        second.admit_write(wreq(), eid())
+    verify(store)
+
+
+# ---- reconciliation
+
+
+@pytest.mark.parametrize("kind", ["missing", "range"])
+def test_reconcile_settles_an_unknown_reservation_from_reported_usage(tmp_path, kind):
+    store, clock, gate, decision_id, unknown_id = unknown_llm(tmp_path, kind)
+    before = run_state(store)
+    assert before.reserved_tokens == 637 and before.reservations[decision_id].status == "unknown"
+    clock.adv(1)
+    reconcile_id = eid()
+    result = gate.reconcile_llm_outcome(unknown_id, 98, 40, reconcile_id)
+    assert result.status == "applied" and result.decision is None
+    event = last_event(store)
+    assert (event.event_kind, event.operation, event.decision, event.reason_code) == (
+        "outcome", "llm", "allow", "reconciliation",
+    )
+    assert event.references_event_id == unknown_id
+    assert (event.model, event.schema_name) == ("gpt-4o-mini", "NewsDigest")
+    assert (event.usage_prompt_tokens, event.usage_completion_tokens) == (98, 40)
+    assert event.reservation_released == 637 and event.overrun_tokens is None
+    assert dict(event.counters) == {
+        "calls": 1,
+        "prompt_tokens": 98,
+        "completion_tokens": 40,
+        "reserved_tokens": 0,
+        "remaining_tokens": 20000 - 138,
+        "budget_deficit": 0,
+    }
+    state = run_state(store)
+    assert state.reserved_tokens == 0 and (state.prompt_tokens, state.completion_tokens) == (98, 40)
+    assert state.reservations[decision_id].status == "resolved" and unknown_id in state.reconciled
+    verify(store)
+
+
+def test_reconcile_by_the_new_owner_after_takeover_frees_the_held_tokens(tmp_path):
+    store, clock, gate, decision_id, unknown_id = unknown_llm(tmp_path)
+    second = taken_over(store, clock)
+    assert second.reconcile_llm_outcome(unknown_id, 98, 40, eid()).status == "applied"
+    event = last_event(store)
+    assert (event.lease_owner, event.lease_epoch) == (OWNER_B, 2)
+    assert run_state(store).reserved_tokens == 0
+    verify(store)
+
+
+def test_reconcile_may_leave_a_token_deficit_and_carries_no_overrun(tmp_path):
+    store, clock, gate, decision_id, unknown_id = unknown_llm(tmp_path, max_run_tokens=1000)
+    clock.adv(1)
+    gate.reconcile_llm_outcome(unknown_id, 900, 500, eid())
+    event = last_event(store)
+    assert event.reason_code == "reconciliation" and event.overrun_tokens is None
+    assert event.counters["budget_deficit"] == 400 and event.counters["remaining_tokens"] == 0
+    verify(store)
+
+
+def test_reconcile_usage_above_the_reservation_without_a_deficit_has_no_overrun(tmp_path):
+    store, clock, gate, decision_id, unknown_id = unknown_llm(tmp_path)
+    clock.adv(1)
+    gate.reconcile_llm_outcome(unknown_id, 600, 100, eid())  # 700 > 637 held, balance still positive
+    event = last_event(store)
+    assert event.overrun_tokens is None and event.counters["budget_deficit"] == 0
+    verify(store)
+
+
+@pytest.mark.parametrize(
+    "prompt,completion",
+    [(None, None), (1, None), (None, 1), (-1, 5), (True, 5), (5.0, 1), ("5", 1), (INT64 + 1, 0), (0, INT64 + 1), (INT64, INT64)],
+)
+def test_reconcile_refuses_missing_or_unusable_usage_and_writes_nothing(tmp_path, prompt, completion):
+    store, clock, gate, decision_id, unknown_id = unknown_llm(tmp_path)
+    rows = count(store)
+    clock.adv(1)
+    with pytest.raises(GatekeeperError):
+        gate.reconcile_llm_outcome(unknown_id, prompt, completion, eid())
+    assert count(store) == rows
+    state = run_state(store)
+    assert state.reserved_tokens == 637 and state.reservations[decision_id].status == "unknown"
+    verify(store)
+
+
+def test_reconcile_refuses_anything_that_is_not_an_open_llm_unknown(tmp_path):
+    store, clock, gate, decision_id, unknown_id = unknown_llm(tmp_path)
+    normal = eid()
+    other_decision = eid()
+    gate.admit_llm(req(), other_decision)
+    gate.record_llm_outcome(other_decision, 98, 40, normal)
+    rows = count(store)
+    clock.adv(1)
+    for bad in (decision_id, normal, other_decision, eid(), "x"):
+        with pytest.raises(GatekeeperRequestError):
+            gate.reconcile_llm_outcome(bad, 98, 40, eid())
+    with pytest.raises(GatekeeperRequestError):
+        gate.reconcile_llm_outcome("", 98, 40, eid())
+    with pytest.raises(GatekeeperRequestError):
+        gate.reconcile_llm_outcome(None, 98, 40, eid())
+    assert count(store) == rows
+    verify(store)
+
+
+def test_reconcile_works_only_once_per_unknown(tmp_path):
+    store, clock, gate, decision_id, unknown_id = unknown_llm(tmp_path)
+    clock.adv(1)
+    first = eid()
+    gate.reconcile_llm_outcome(unknown_id, 98, 40, first)
+    rows = count(store)
+    with pytest.raises(GatekeeperRequestError, match="not unknown"):
+        gate.reconcile_llm_outcome(unknown_id, 98, 40, eid())
+    assert gate.reconcile_llm_outcome(unknown_id, 98, 40, first).status == "already_applied"
+    assert count(store) == rows
+    verify(store)
+
+
+def test_reconcile_needs_a_live_lease_owned_by_the_caller(tmp_path):
+    store, clock, gate, decision_id, unknown_id = unknown_llm(tmp_path)
+    foreign = other(store, clock, owner_id=OWNER_B)
+    rows = count(store)
+    clock.adv(1)
+    with pytest.raises(GatekeeperLeaseError):
+        foreign.reconcile_llm_outcome(unknown_id, 98, 40, eid())  # no takeover yet
+    expire(clock)
+    with pytest.raises(GatekeeperLeaseError):
+        gate.reconcile_llm_outcome(unknown_id, 98, 40, eid())  # expired
+    assert count(store) == rows
+    with pytest.raises(GatekeeperLeaseError):
+        foreign.reconcile_llm_outcome(unknown_id, 98, 40, eid())  # expired and not taken over
+    assert count(store) == rows
+    verify(store)
+
+
+def test_reconcile_refuses_a_write_unknown(tmp_path):
+    store, clock, gate = approved(tmp_path)
+    write_id, outcome_id = eid(), eid()
+    gate.admit_write(wreq(), write_id)
+    gate.record_write_outcome(write_id, "unknown", outcome_id)
+    rows = count(store)
+    for target in (write_id, outcome_id):
+        with pytest.raises(GatekeeperRequestError):
+            gate.reconcile_llm_outcome(target, 1, 1, eid())
+    assert count(store) == rows
+    verify(store)
+
+
+def test_reconcile_reads_the_clock_once_for_a_new_event_and_never_for_a_duplicate_or_refusal(tmp_path, no_system_clock):
+    clock = CountingClock()
+    store, clock, gate = make(tmp_path, clock=clock)
+    gate.start_run(eid())
+    gate.acquire_lease(eid())
+    clock.adv(10)
+    decision_id, unknown_id, reconcile_id = eid(), eid(), eid()
+    gate.admit_llm(req(), decision_id)
+    gate.record_llm_outcome(decision_id, None, None, unknown_id)
+    reads = clock.reads
+    with pytest.raises(GatekeeperRequestError):
+        gate.reconcile_llm_outcome(unknown_id, None, None, eid())
+    assert clock.reads == reads
+    gate.reconcile_llm_outcome(unknown_id, 98, 40, reconcile_id)
+    assert clock.reads == reads + 1
+    clock.adv(1000)  # even an expired lease cannot stop a confirmation
+    before = clock.reads
+    assert gate.reconcile_llm_outcome(unknown_id, 98, 40, reconcile_id).status == "already_applied"
+    assert clock.reads == before
+
+
+def test_reconcile_duplicate_with_other_usage_reference_or_owner_is_not_confirmed(tmp_path):
+    store, clock, gate, decision_id, unknown_id = unknown_llm(tmp_path)
+    clock.adv(1)
+    reconcile_id = eid()
+    gate.reconcile_llm_outcome(unknown_id, 98, 40, reconcile_id)
+    rows = count(store)
+    with pytest.raises(control.AuditIncomplete, match="different logical fingerprint"):
+        gate.reconcile_llm_outcome(unknown_id, 99, 40, reconcile_id)
+    with pytest.raises(GatekeeperRequestError, match="different"):
+        gate.reconcile_llm_outcome(decision_id, 98, 40, reconcile_id)
+    foreign = other(store, clock, owner_id=OWNER_B)
+    with pytest.raises(GatekeeperRequestError, match="another lease owner"):
+        foreign.reconcile_llm_outcome(unknown_id, 98, 40, reconcile_id)
+    assert count(store) == rows
+    verify(store)
+
+
+def test_reconcile_event_id_of_another_kind_is_refused(tmp_path):
+    store, clock, gate, decision_id, unknown_id = unknown_llm(tmp_path)
+    clock.adv(1)
+    rows = count(store)
+    with pytest.raises(GatekeeperRequestError, match="different event kind"):
+        gate.reconcile_llm_outcome(unknown_id, 98, 40, decision_id)
+    assert count(store) == rows
+
+
+def test_reconciled_tokens_count_against_the_budget_for_later_admission(tmp_path):
+    store, clock, gate, decision_id, unknown_id = unknown_llm(tmp_path, max_run_tokens=1200)
+    clock.adv(1)
+    assert not gate.admit_llm(req(100), eid()).decision.allow  # 637 still held while unknown
+    gate.reconcile_llm_outcome(unknown_id, 20, 10, eid())
+    clock.adv(1)
+    assert gate.admit_llm(req(100), eid()).decision.allow
+    verify(store)
+
+
+def _g2c_calls(gate, second, ids):
+    return {
+        "takeover": lambda: second.take_over_lease(ids["takeover"]),
+        "reconcile": lambda: gate.reconcile_llm_outcome(ids["unknown"], 98, 40, ids["reconcile"]),
+    }
+
+
+@pytest.mark.parametrize("method", ["takeover", "reconcile"])
+@pytest.mark.parametrize("mode,expected", [("landed", "already_applied"), ("absent", "applied")])
+def test_unknown_commit_on_each_g2c_method_is_execute_or_confirm(tmp_path, method, mode, expected):
+    store, clock, gate, decision_id, unknown_id = unknown_llm(tmp_path)
+    ids = {"takeover": eid(), "reconcile": eid(), "unknown": unknown_id}
+    if method == "takeover":
+        expire(clock)
+        actor = other(store, clock, owner_id=OWNER_B)
+    else:
+        clock.adv(1)
+        actor = gate
+    calls = _g2c_calls(gate, actor, ids)
+    real = store._conn
+    store._conn = Wrap(real, mode)
+    with pytest.raises(control.ControlUnavailable) as caught:
+        calls[method]()
+    assert caught.value.append_state == "unknown"
+    store._conn = real
+    assert actor.event_status(ids[method]).state == ("present" if mode == "landed" else "absent")
+    clock.adv(2)
+    assert calls[method]().status == expected
+    assert store._conn.execute(
+        "SELECT count(*) FROM audit_events WHERE event_id = ?", (ids[method],)
+    ).fetchone()[0] == 1
+    verify(store)
+
+
+@pytest.mark.parametrize("needle", [READ_CHAIN, INSERT_EVENT])
+@pytest.mark.parametrize("method", ["takeover", "reconcile"])
+def test_sqlite_error_in_a_g2c_method_propagates_unchanged_after_a_confirmed_rollback(tmp_path, method, needle):
+    store, clock, gate, decision_id, unknown_id = unknown_llm(tmp_path)
+    ids = {"takeover": eid(), "reconcile": eid(), "unknown": unknown_id}
+    if method == "takeover":
+        expire(clock)
+        actor = other(store, clock, owner_id=OWNER_B)
+    else:
+        clock.adv(1)
+        actor = gate
+    calls = _g2c_calls(gate, actor, ids)
+    real = store._conn
+    rows = count(store)
+    store._conn = FailOn(real, needle)
+    with pytest.raises(sqlite3.OperationalError, match="injected statement failure") as caught:
+        calls[method]()
+    assert not isinstance(caught.value, control.ControlUnavailable)
+    store._conn = real
+    assert count(store) == rows and real.in_transaction is False
+    verify(store)
+
+
+def test_the_two_new_methods_leave_earlier_behaviour_unchanged(tmp_path):
+    store, clock, gate, decision_id, unknown_id = unknown_llm(tmp_path)
+    second = taken_over(store, clock)
+    second.reconcile_llm_outcome(unknown_id, 98, 40, eid())
+    assert second.admit_fetch(freq(), eid()).decision.allow
+    with pytest.raises(GatekeeperLeaseError):
+        second.acquire_lease(eid())  # a live lease still blocks acquire
+    second.release_lease(eid())
+    state = run_state(store)
+    assert (state.calls, state.fetch_count, state.reserved_tokens) == (1, 1, 0)
+    assert state.lease.released and state.lease.epoch == 2
+    verify(store)

@@ -1,4 +1,4 @@
-"""Gatekeeper for the H1 control layer (slice 2b-iii, batches G1, G2a and G2b).
+"""Gatekeeper for the H1 control layer (slice 2b-iii, batches G1, G2a, G2b and G2c).
 
 One Gatekeeper serves one run. Every public method that writes opens exactly one
 ``AuditStore.transaction(ledger.LedgerProjection())``, verifies the committed
@@ -28,8 +28,8 @@ Contract
 - Lease: a decision or outcome needs a live lease owned by this gatekeeper. A
   lease that has already expired cannot be renewed (the chain rejects it). The
   owner may still release it, and a different owner id may then acquire and
-  record outcomes for earlier decisions. If the owner is gone, closing an open
-  reservation needs takeover, which is not in this batch. There is no heartbeat.
+  record outcomes for earlier decisions. If the owner is gone and the lease has
+  expired, a different owner id can take it over (G2c). There is no heartbeat.
 - The gatekeeper never estimates a token count, never calls a tokenizer or a
   provider, and never reads a clock other than the injected ``now``: exactly once
   per NEW event, never for a duplicate or for event_status. That one reading is
@@ -71,7 +71,25 @@ Contract
   that a lease owner recorded them. A repeated event id is rebuilt from the request, so
   a different target, content hash or outcome is refused, not confirmed. The content
   hash is a caller-supplied SHA-256 hint; the gatekeeper never computes or checks it.
-- Takeover and reconciliation are not in this batch.
+- G2c adds ``take_over_lease`` and ``reconcile_llm_outcome``. Takeover needs an
+  unreleased lease that is expired by THIS gatekeeper's injected clock and an owner id
+  different from the current lease owner. It starts the next epoch and references the
+  previous lease event. Only the current owner string is compared, as in acquire: a
+  caller must give every worker incarnation a fresh owner id. No second clock is
+  consulted, so a fast clock in the new owner can take a lease that is still live by
+  the old owner's clock, and nothing stops a call the old worker already has in flight.
+  After a takeover the new owner may record outcomes for decisions made under the
+  earlier epoch. That includes ``failed`` for an earlier allowed write, which lifts the
+  one-open-write guard even though the old write may in fact have happened. G2c leaves
+  that G2b rule unchanged and names the risk here; stronger recovery for writes is a
+  separate change that must come before any live write.
+  ``reconcile_llm_outcome`` settles a reservation left ``unknown`` by ``usage_missing``
+  or ``usage_out_of_range``, from usage the caller reports now. Both figures must be
+  usable ints, otherwise the call is refused and nothing is written. The event
+  releases exactly the held reservation, carries the six counters from
+  ``ledger.expected_counters``, carries no overrun, may leave a token deficit, and
+  closes the unknown once. The usage is a caller report, not provider proof. A write
+  ``unknown`` has no reconciliation, and a reservation cannot be released without usage.
 """
 from __future__ import annotations
 
@@ -470,6 +488,52 @@ class Gatekeeper:
     def release_lease(self, event_id: str) -> GatekeeperResult:
         return self._lease(event_id, "lease_released")
 
+    def take_over_lease(self, event_id: str) -> GatekeeperResult:
+        def build(state, prior, events, stored):
+            run = self._run_of(state)
+            basis = self._run_of(prior)
+            if stored is not None:
+                lease = basis.lease
+                if lease is None or lease.released:
+                    raise GatekeeperRequestError("the stored takeover has no earlier unreleased lease")
+                observed = _utc(stored.observed_now)
+                recorded = stored.recorded_at
+                epoch = stored.lease_epoch
+            else:
+                lease = run.lease
+                if lease is None or lease.released:
+                    raise GatekeeperLeaseError("there is no unreleased lease to take over")
+                if lease.owner_id == self._owner:
+                    raise GatekeeperLeaseError(
+                        "takeover needs an owner id different from the current lease owner"
+                    )
+                observed = self._stamp()
+                self._check_monotonic(observed, events)
+                if _utc(lease.expires_at) > observed:
+                    raise GatekeeperLeaseError("the lease has not expired")
+                recorded = observed.isoformat()
+                epoch = lease.epoch + 1
+            event = self._event(
+                recorded,
+                event_id=event_id,
+                operation="run",
+                event_kind="lease_taken_over",
+                decision="allow",
+                reason_code="allowed",
+                counters={},
+                lease_owner=self._owner,
+                lease_epoch=epoch,
+                observed_now=observed.isoformat(),
+                lease_expires_at=(observed + timedelta(seconds=self._ttl)).isoformat(),
+                lease_ttl_seconds=self._ttl,
+                previous_lease_owner=lease.owner_id,
+                previous_lease_epoch=lease.epoch,
+                references_event_id=lease.last_event_id,
+            )
+            return event, None
+
+        return self._execute(event_id, "lease_taken_over", "run", build)
+
     # ------------------------------------------------------------------- llm
 
     def admit_llm(self, request: admission.LLMRequest, event_id: str) -> GatekeeperResult:
@@ -607,6 +671,72 @@ class Gatekeeper:
                 ),
                 None,
             )
+
+        return self._execute(event_id, "outcome", "llm", build)
+
+    def reconcile_llm_outcome(
+        self,
+        unknown_outcome_event_id: str,
+        usage_prompt_tokens: object,
+        usage_completion_tokens: object,
+        event_id: str,
+    ) -> GatekeeperResult:
+        if not isinstance(unknown_outcome_event_id, str) or not unknown_outcome_event_id:
+            raise GatekeeperRequestError("unknown_outcome_event_id must be a non-empty string")
+        if not (_usable_int(usage_prompt_tokens) and _usable_int(usage_completion_tokens)):
+            raise GatekeeperRequestError(
+                "reconciliation needs both usage figures as non-negative ints within int64"
+            )
+
+        def build(state, prior, events, stored):
+            run = self._run_of(state)
+            basis = self._run_of(prior)
+            if stored is not None and stored.references_event_id != unknown_outcome_event_id:
+                raise GatekeeperRequestError("event_id references a different unknown outcome")
+            decision_id = basis.unknown_outcomes.get(unknown_outcome_event_id)
+            if decision_id is None:
+                raise GatekeeperRequestError("the event is not an unknown llm outcome of this run")
+            decision = basis.decisions.get(decision_id)
+            if decision is None or not decision.allow or decision.operation != "llm":
+                raise GatekeeperRequestError("the unknown outcome has no allowed llm decision")
+            reservation = basis.reservations.get(decision_id)
+            if reservation is None or reservation.status != "unknown":
+                raise GatekeeperRequestError("the reservation is not unknown (already reconciled?)")
+            held = reservation.reserved_tokens
+            if stored is None:
+                now = self._stamp()
+                self._check_monotonic(now, events)
+                lease = self._owned_lease(run, now, require_unexpired=True)
+                observed, owner, epoch = now.isoformat(), lease.owner_id, lease.epoch
+                recorded = observed
+            else:
+                observed, owner, epoch = stored.observed_now, stored.lease_owner, stored.lease_epoch
+                recorded = stored.recorded_at
+                if owner != self._owner:
+                    raise GatekeeperRequestError("the stored event belongs to another lease owner")
+            fields = dict(
+                event_id=event_id,
+                operation="llm",
+                event_kind="outcome",
+                decision="allow",
+                reason_code="reconciliation",
+                model=decision.model,
+                schema_name=decision.schema_name,
+                references_event_id=unknown_outcome_event_id,
+                usage_prompt_tokens=usage_prompt_tokens,
+                usage_completion_tokens=usage_completion_tokens,
+                reservation_released=held,
+                lease_owner=owner,
+                lease_epoch=epoch,
+                observed_now=observed,
+            )
+            placeholder = dict.fromkeys(control.COUNTER_KEYS, 0)  # shape only; the ledger derives the real values
+            draft = self._event(recorded, counters=placeholder, **fields)
+            try:
+                counters = ledger.expected_counters(prior, draft)
+            except ledger.LedgerError as exc:
+                raise GatekeeperRequestError(f"the usage cannot be reconciled: {exc}") from exc
+            return self._event(recorded, counters=dict(counters), **fields), None
 
         return self._execute(event_id, "outcome", "llm", build)
 

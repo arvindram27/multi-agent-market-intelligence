@@ -26,9 +26,24 @@
   <em>Fixture-mode demo snapshot - not a live run.</em>
 </p>
 
-MAMI reads news feeds and competitor pages and runs typed LLM agents over them. A person reviews each run before anything is saved to Postgres. Each result carries its source details.
+MAMI is our project for building a domain-specific agent harness. Market intelligence is the application we use to exercise it. The harness is meant to decide what an agent run may spend, fetch and write, and to keep a record of what happened. We are building it in stages. Its control components are built and tested offline. A complete harness is not finished, and the pipeline does not call those components yet.
+
+The current workflow reads news feeds and competitor pages and runs typed LLM agents over them. A person reviews each run before anything is saved to Postgres. Each result carries its source details.
+
+See [Our direction](#our-direction) and [Status](#status) for what is built and what is not.
 
 > 📄 **Production roadmap:** see [`PRODUCTION_PLAN.md`](./PRODUCTION_PLAN.md) for the target architecture, and the deferred directions under evaluation (Oracle 23ai, LangSmith, Grafana Cloud, RAGAS - not built features).
+
+## Our direction
+
+We want agent runs that stay inside limits a person set, and that leave a record someone can check.
+
+- **Token budgets:** tokens are reserved before a model call and settled from the usage reported after it. Admission checks use declared token reservations. Actual usage can exceed them. This is not a guarantee on token use or money spent.
+- **Fetch and write:** fetches follow admission rules and a per-run cap. A write is allowed only for the target recorded as approved. The caller supplies that approval record, and we do not check who approved or what they saw.
+- **Record:** accepted decisions and outcomes go into an append-only, hash-chained audit log. A refused or invalid request may leave no event.
+- **Application:** the market intelligence pipeline, with a person approving each run.
+
+What is true today: the control pieces are offline libraries with tests, and the pipeline does not use them. We have not run a live workflow under them. The audit log holds what the caller reports, so it does not prove that an outside action did or did not happen.
 
 ## 🚀 Features
 
@@ -61,6 +76,7 @@ MAMI reads news feeds and competitor pages and runs typed LLM agents over them. 
 │   ├── control.py                      # H1 audit event chain (offline, not wired in)
 │   ├── admission.py                    # H1 admission policy (offline, not wired in)
 │   ├── ledger.py                       # H1 ledger replay (offline, not wired in)
+│   ├── gatekeeper.py                   # H1 gatekeeper: lease, admission and audit calls (offline, not wired in)
 │   ├── persistence.py                  # approved-run persistence contract
 │   └── persistence_postgres.py         # Postgres writer for approved runs
 ├── tests/                              # offline suite and Postgres integration tests
@@ -111,7 +127,7 @@ Status reflects the code and offline tests. Live output quality has not been mea
 ### Implemented
 - Typed LLM agents for news summaries, topics, news tone and competitor comparison
 - LangGraph workflow with retries, checkpoints and a human approval gate before saving
-- Per-run ceilings on LLM calls and tokens
+- Per-run ceilings on LLM calls and tokens, with tokens counted after each reply
 - Postgres storage for approved runs (local Docker)
 - RSS collector that stores feed sweeps and article versions without LLM calls
 - Read-only SQL report on ingestion health and stored results
@@ -123,13 +139,17 @@ The H1 control layer is a set of offline Python libraries with tests. The pipeli
 - Audit event chain: append-only and hash-chained in SQLite with a read-only verifier
 - Admission policy: pure allow or deny checks with a token reservation estimate
 - Ledger replay: rebuilds per-run token accounts from the audit events and checks stored rows
+- Gatekeeper: one instance per run. It holds a lease and records admission decisions and outcomes for model calls, fetches and writes. It settles a model call's token reservation from usage the caller reports, and can settle a reservation left unknown when usage was missing. A different worker can take over a lease once it has expired. A write is allowed only for the target recorded as approved, and an unresolved write blocks the next one. It records what the caller reports. It does not authenticate the approver and cannot prove an outside effect
 
 ### Planned
-- Gatekeeper, tokenizer and request serializer, then wiring into the pipeline
+- Tokenizer and request serializer, then wiring the gatekeeper into the pipeline
 - Ideas only: Oracle 23ai with vector search, LangSmith with OpenTelemetry, RAGAS evaluation and FastAPI (see `PRODUCTION_PLAN.md`)
 
 ### Limits
 - No measured output quality on live runs and no evaluation set yet
+- The running pipeline counts tokens after each model reply, so one large request can pass the ceiling. Reserving before a call exists only in the unconnected control layer
+- Lease takeover does not stop a call the old worker already has in flight, and the new worker's own clock decides when a lease has expired
+- After a takeover, the new worker can report an earlier write as failed, which allows another write even if the first one happened. Stronger recovery for a write with an unknown result is not built and is needed before any live write
 - Topics come from one snapshot so they are not trends over time
 - News tone is a model assessment and not consumer sentiment
 - Local use only and not multi-tenant safe
@@ -650,4 +670,4 @@ Released under the [MIT License](./LICENSE). Copyright (c) 2026 arvindram27.
 
 ---
 
-**Status**: LangGraph pipeline with Postgres storage, RSS ingestion, SQL analysis and CI, implemented in code. The H1 control libraries are built and tested offline but not connected.
+**Status**: LangGraph pipeline with Postgres storage, RSS ingestion, SQL analysis and CI, implemented in code. The H1 control libraries, including the gatekeeper, are built and tested offline but not connected.
