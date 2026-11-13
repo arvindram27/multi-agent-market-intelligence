@@ -18,6 +18,18 @@ What it does and does not give:
 - The journal is bound to one run id, thread id, lease TTL and policy digest; a journal
   from another run or policy is refused before any lease call.
 - Only definite refusals close an intent. An unknown outcome leaves it open.
+- Approval target (G4d): an approval is recorded together with an opaque target string
+  (for example a digest of what the user was shown). A resume refuses to run unless the
+  target the caller reports now equals the recorded one. The check is made before any
+  pending lease call or acquire, and again right after the lease is held, before the
+  stub runs; a mismatch at the second check gives the lease back and runs nothing. The
+  Coordinator does not know what the target means; the caller chooses and computes it.
+  decide() requires the target explicitly, so what was approved is what the caller says it
+  showed; the Coordinator never derives it at decision time. A decision is written once per run: a second decision with a different value or a
+  different target is refused, so a run that pauses again for a new target cannot be
+  approved again here. Nothing makes the target check and the stub one atomic step:
+  a writer outside the lease can still change the state in between, and a
+  caller-supplied target is not a fence.
 """
 from __future__ import annotations
 
@@ -133,6 +145,17 @@ _REFUSALS = (
 )
 
 
+def _valid_target(value: object) -> str:
+    if (
+        not isinstance(value, str)
+        or not value
+        or len(value) > 256
+        or not value.isprintable()
+    ):
+        raise LifecycleError("the approval target must be a non-empty printable string of at most 256 characters")
+    return value
+
+
 def _policy_digest(policy: admission.PolicyConfig) -> str:
     values = {
         k: (sorted(v) if isinstance(v, (set, frozenset)) else v)
@@ -152,6 +175,7 @@ class Coordinator:
         thread_id: str,
         lease_ttl_seconds: int,
         now: Callable[[], datetime],
+        current_target: Callable[[], str],
         new_owner: Callable[[], str] = lambda: str(uuid.uuid4()),
         fault: Callable[[str], None] | None = None,
     ) -> None:
@@ -162,6 +186,7 @@ class Coordinator:
         self._thread_id = thread_id
         self._ttl = lease_ttl_seconds
         self._now = now
+        self._current_target = current_target
         self._new_owner = new_owner
         self._fault = fault or (lambda point: None)
         self._incarnation = str(uuid.uuid4())
@@ -211,6 +236,19 @@ class Coordinator:
             if rec["op"] == "decision":
                 found = rec["value"]
         return found
+
+    def decision_target(self) -> str | None:
+        found = None
+        for rec in self._records():
+            if rec["op"] == "decision":
+                found = rec.get("target")
+        return found
+
+    def _require_target(self, recorded: str | None) -> None:
+        if recorded is None:
+            raise LifecycleBlocked("the approval has no recorded target")
+        if _valid_target(self._current_target()) != recorded:
+            raise LifecycleBlocked("the current target differs from the approved target; nothing was resumed")
 
     def still_holds(self, segment: Segment) -> bool:
         """Advisory only: true if a snapshot taken now shows this segment as the live lease."""
@@ -371,16 +409,26 @@ class Coordinator:
 
     # --------------------------------------------------------- decision, flows
 
-    def decide(self, payload: object) -> str:
-        """Record an approval payload before any lease call. Invalid input records nothing."""
+    def decide(self, payload: object, target: str) -> str:
+        """Record an approval payload and its explicit target before any lease call.
+
+        Invalid input records nothing and reads no target. A valid decision needs a
+        non-empty target (LifecycleError otherwise, nothing recorded); the current_target
+        callback is never used here. A repeat is accepted only with the same value and the
+        same target.
+        """
         if not isinstance(payload, dict) or type(payload.get("approved")) is not bool:
             return "invalid"
         value = "approved" if payload["approved"] else "rejected"
+        target = _valid_target(target)
         existing = self.decision()
-        if existing is not None and existing != value:
-            raise LifecycleBlocked("a different decision is already recorded")
-        if existing is None:
-            self._append({"op": "decision", "value": value})
+        if existing is not None:
+            if existing != value:
+                raise LifecycleBlocked("a different decision is already recorded")
+            if self.decision_target() != target:
+                raise LifecycleBlocked("a decision with a different target is already recorded")
+            return value
+        self._append({"op": "decision", "value": value, "target": target})
         return value
 
     def run_first_segment(self, start_graph: Callable[[], str]) -> str:
@@ -422,6 +470,9 @@ class Coordinator:
         """
         if self.decision() != "approved":
             return "no_approved_decision"
+        recorded = self.decision_target()
+        if not any(r["op"] == "resume_finished" for r in self._records()):
+            self._require_target(recorded)
         self.resume_pending()
         self.resolve_foreign()
         finished = any(r["op"] == "resume_finished" for r in self._records())
@@ -438,6 +489,11 @@ class Coordinator:
         else:
             raise LifecycleBlocked(action)
         self._confirm_holding(segment)
+        try:
+            self._require_target(recorded)
+        except LifecycleBlocked:
+            self.release(segment)
+            raise
         outcome = resume_graph()
         if outcome == "finished":
             self._append({"op": "resume_finished"})

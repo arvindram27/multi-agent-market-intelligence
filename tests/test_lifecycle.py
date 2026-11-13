@@ -35,6 +35,7 @@ T0 = datetime(2026, 11, 13, 0, 0, 0, tzinfo=timezone.utc)
 RUN = "run-1"
 TTL = 300
 _STORES = []
+TARGET = {"v": "target-1"}
 
 
 class Clock:
@@ -64,6 +65,7 @@ def cfg(**overrides):
 
 @pytest.fixture(autouse=True)
 def _close():
+    TARGET["v"] = "target-1"
     yield
     while _STORES:
         _STORES.pop().close()
@@ -80,7 +82,7 @@ def coord(tmp_path, store=None, clock=None, name="j1", fault=None, policy=None):
     clock = clock or Clock()
     c = Coordinator(
         store, policy or cfg(), IntentJournal(tmp_path / f"{name}.jsonl"),
-        run_id=RUN, thread_id="thread-1", lease_ttl_seconds=TTL, now=clock, fault=fault,
+        run_id=RUN, thread_id="thread-1", lease_ttl_seconds=TTL, now=clock, current_target=lambda: TARGET["v"], fault=fault,
     )
     return c, store, clock
 
@@ -144,7 +146,7 @@ def test_first_segment_starts_acquires_epoch_1_and_releases_once_on_pause(tmp_pa
 def test_approved_resume_uses_new_owner_and_epoch_from_audit_then_releases(tmp_path):
     c, store, clock = paused_run(tmp_path)
     calls = []
-    assert c.decide({"approved": True}) == "approved"
+    assert c.decide({"approved": True}, "target-1") == "approved"
     assert c.run_approved(lambda: calls.append(1) or "finished") == "finished"
     ev = owners(store)
     assert [e[0] for e in ev] == ["run_started", "lease_acquired", "lease_released", "lease_acquired", "lease_released"]
@@ -157,18 +159,18 @@ def test_approved_resume_uses_new_owner_and_epoch_from_audit_then_releases(tmp_p
 def test_rejected_and_invalid_never_touch_the_lease(tmp_path):
     c, store, clock = paused_run(tmp_path, name="a")
     before = count(store)
-    assert c.decide("nope") == "invalid"
-    assert c.decide({"approved": "yes"}) == "invalid"
-    assert c.decide({}) == "invalid"
+    assert c.decide("nope", "target-1") == "invalid"
+    assert c.decide({"approved": "yes"}, "target-1") == "invalid"
+    assert c.decide({}, "target-1") == "invalid"
     assert c.decision() is None
     assert c.run_approved(lambda: pytest.fail("resume must not run")) == "no_approved_decision"
-    assert c.decide({"approved": False}) == "rejected"
+    assert c.decide({"approved": False}, "target-1") == "rejected"
     assert c.run_approved(lambda: pytest.fail("resume must not run")) == "no_approved_decision"
     with pytest.raises(LifecycleBlocked):
         c.acquire(needs_approved_decision=True)
     assert count(store) == before
     with pytest.raises(LifecycleBlocked):
-        c.decide({"approved": True})
+        c.decide({"approved": True}, "target-1")
 
 
 def test_acquire_needs_a_recorded_approval_and_a_started_run(tmp_path):
@@ -186,7 +188,7 @@ def test_epoch_follows_audit_history_across_takeover(tmp_path):
     c, store, clock = coord(tmp_path)
     c.start()
     s1 = c.acquire(needs_approved_decision=False)  # epoch 1, never released (crash)
-    c.decide({"approved": True})
+    c.decide({"approved": True}, "target-1")
     clock.adv(TTL + 1)
     s2 = c.take_over()
     assert (s1.epoch, s2.epoch) == (1, 2) and s1.owner != s2.owner
@@ -250,7 +252,7 @@ def test_open_intent_blocks_new_lease_calls_until_resolved(tmp_path):
 
 def test_losing_racer_ends_its_intent_and_never_retries_the_taken_id(tmp_path):
     a, store, clock = paused_run(tmp_path, name="a")
-    a.decide({"approved": True})
+    a.decide({"approved": True}, "target-1")
     hits = {}
 
     def b_fault(point):
@@ -258,7 +260,7 @@ def test_losing_racer_ends_its_intent_and_never_retries_the_taken_id(tmp_path):
             hits["a"] = a.acquire(needs_approved_decision=True)  # A wins the same target epoch
 
     b, _, _ = coord(tmp_path, store=store, clock=clock, name="b", fault=b_fault)
-    b.decide({"approved": True})
+    b.decide({"approved": True}, "target-1")
     with pytest.raises(control.AuditIncomplete):
         b.acquire(needs_approved_decision=True)
     assert count(store) == 4 and hits["a"].epoch == 2
@@ -276,7 +278,7 @@ def test_new_process_waits_while_live_then_takes_over_with_new_owner(tmp_path):
     a.start()
     dead = a.acquire(needs_approved_decision=False)  # process dies holding the lease
     b, _, _ = coord(tmp_path, store=store, clock=clock, name="b")
-    b.decide({"approved": True})
+    b.decide({"approved": True}, "target-1")
     n = count(store)
     with pytest.raises(LifecycleBlocked):
         b.run_approved(lambda: pytest.fail("must not resume while the lease is live"))
@@ -291,7 +293,7 @@ def test_new_process_waits_while_live_then_takes_over_with_new_owner(tmp_path):
 
 def test_resume_is_at_least_once_when_the_stub_fails_after_acquire(tmp_path):
     c, store, clock = paused_run(tmp_path, name="a")
-    c.decide({"approved": True})
+    c.decide({"approved": True}, "target-1")
     runs = []
 
     def failing():
@@ -317,7 +319,7 @@ def test_release_crash_after_resume_finished_does_not_rerun_the_stub(tmp_path):
             raise Boom
 
     c, store, clock = paused_run(tmp_path, fault=fault)
-    c.decide({"approved": True})
+    c.decide({"approved": True}, "target-1")
     runs = []
     with pytest.raises(Boom):
         c.run_approved(lambda: runs.append(1) or "finished")
@@ -334,7 +336,7 @@ def test_snapshot_is_stale_and_only_the_gatekeeper_call_refuses(tmp_path):
     assert c.still_holds(seg) is True
     clock.adv(TTL + 1)
     other, _, _ = coord(tmp_path, store=store, clock=clock, name="b")
-    other.decide({"approved": True})
+    other.decide({"approved": True}, "target-1")
     other.take_over()
     assert snap.owner_id == seg.owner and snap.released is False  # the old value did not change
     n = count(store)
@@ -350,7 +352,7 @@ def test_snapshot_is_stale_and_only_the_gatekeeper_call_refuses(tmp_path):
 
 def test_changed_policy_on_the_same_journal_is_refused_before_any_call(tmp_path):
     c, store, clock = paused_run(tmp_path, name="a")
-    c.decide({"approved": True})
+    c.decide({"approved": True}, "target-1")
     d, _, _ = coord(tmp_path, store=store, clock=clock, name="a", policy=cfg(max_run_tokens=999))
     n = count(store)
     with pytest.raises(LifecycleJournalError):
@@ -361,7 +363,7 @@ def test_changed_policy_on_the_same_journal_is_refused_before_any_call(tmp_path)
 def test_changed_policy_on_a_fresh_journal_is_refused_by_the_gatekeeper(tmp_path):
     c, store, clock = paused_run(tmp_path, name="a")
     d, _, _ = coord(tmp_path, store=store, clock=clock, name="fresh", policy=cfg(max_run_tokens=999))
-    d.decide({"approved": True})
+    d.decide({"approved": True}, "target-1")
     n = count(store)
     with pytest.raises(GatekeeperPolicyMismatch):
         d.run_approved(lambda: pytest.fail("must not resume"))
@@ -467,7 +469,7 @@ def test_new_coordinator_never_reuses_an_owner_from_open_start_or_release_intent
     c3, _, _ = coord(tmp_path, store=store, clock=clock, name="a")
     n = count(store)
     assert c3.resume_pending() == []
-    c3.decide({"approved": True})
+    c3.decide({"approved": True}, "target-1")
     assert c3.resolve_foreign() == [(derive_event_id(RUN, "release", 1), "absent")]
     assert count(store) == n and c3.status().released is False  # old owner's lease is only left to expire
     with pytest.raises(LifecycleBlocked):
@@ -476,7 +478,7 @@ def test_new_coordinator_never_reuses_an_owner_from_open_start_or_release_intent
 
 def test_finished_branch_does_not_release_a_lease_held_by_an_older_incarnation(tmp_path):
     c1, store, clock = paused_run(tmp_path, name="a", fault=crash_at("after_resume"))
-    c1.decide({"approved": True})
+    c1.decide({"approved": True}, "target-1")
     with pytest.raises(Boom):
         c1.run_approved(lambda: "finished")
     assert c1.status().released is False
@@ -488,7 +490,7 @@ def test_finished_branch_does_not_release_a_lease_held_by_an_older_incarnation(t
 
 def test_paused_outcome_releases_without_marking_finished_and_can_be_redriven(tmp_path):
     c, store, clock = paused_run(tmp_path)
-    c.decide({"approved": True})
+    c.decide({"approved": True}, "target-1")
     assert c.run_approved(lambda: "paused") == "paused"
     assert c.status().released is True
     assert not any(r["op"] == "resume_finished" for r in c._records())
@@ -498,7 +500,7 @@ def test_paused_outcome_releases_without_marking_finished_and_can_be_redriven(tm
 
 def test_unexpected_stub_outcome_leaves_the_lease_held_and_not_finished(tmp_path):
     c, store, clock = paused_run(tmp_path)
-    c.decide({"approved": True})
+    c.decide({"approved": True}, "target-1")
     with pytest.raises(LifecycleError):
         c.run_approved(lambda: "bogus")
     assert c.status().released is False
@@ -561,7 +563,7 @@ def test_acquire_records_the_actual_epoch_when_the_snapshot_was_stale(tmp_path):
 
     c, store, clock = paused_run(tmp_path, fault=fault)
     holder.update(store=store, clock=clock)
-    c.decide({"approved": True})
+    c.decide({"approved": True}, "target-1")
     state["go"] = True
     seg = c.acquire(needs_approved_decision=True)  # read: released epoch 1, intended 2, accepted at 3
     assert seg.epoch == 3
@@ -590,7 +592,7 @@ def test_unknown_commit_after_a_stale_epoch_acquire_confirms_the_same_actual_epo
 
     c, store, clock = paused_run(tmp_path, fault=fault)
     holder.update(store=store, clock=clock)
-    c.decide({"approved": True})
+    c.decide({"approved": True}, "target-1")
     state["go"] = True
     with pytest.raises(Boom):
         c.acquire(needs_approved_decision=True)
@@ -619,7 +621,7 @@ def test_takeover_records_the_actual_epoch_when_the_snapshot_was_stale(tmp_path)
     c.start()
     dead = c.acquire(needs_approved_decision=False)
     holder.update(store=store, clock=clock, dead=dead)
-    c.decide({"approved": True})
+    c.decide({"approved": True}, "target-1")
     clock.adv(TTL + 1)
     state["go"] = True
     seg = c.take_over()  # read: expired epoch 1, intended 2, accepted at 3
@@ -631,7 +633,7 @@ def test_takeover_records_the_actual_epoch_when_the_snapshot_was_stale(tmp_path)
 
 def test_stub_is_not_run_when_the_segment_no_longer_holds_after_acquire(tmp_path):
     c, store, clock = paused_run(tmp_path)
-    c.decide({"approved": True})
+    c.decide({"approved": True}, "target-1")
     orig = c.acquire
 
     def acquire_then_expire(**kw):
@@ -675,3 +677,234 @@ def test_first_segment_stub_is_not_run_when_the_segment_no_longer_holds(tmp_path
     c.acquire = acquire_then_expire
     with pytest.raises(LifecycleBlocked):
         c.run_first_segment(lambda: pytest.fail("the stub must not run"))
+
+
+# ---------------------------------------------------------------- G4d: approval target
+
+
+def journal_ops(tmp_path, name="j1"):
+    return [r["op"] for r in IntentJournal(tmp_path / f"{name}.jsonl").records()]
+
+
+def target_seq(*values):
+    items = list(values)
+
+    def current():
+        v = items.pop(0) if len(items) > 1 else items[0]
+        if isinstance(v, Exception):
+            raise v
+        return v
+
+    return current
+
+
+def test_decision_and_target_are_one_durable_record_that_survives_a_new_coordinator(tmp_path):
+    c, store, clock = paused_run(tmp_path)
+    assert c.decide({"approved": True}, "target-1") == "approved"
+    recs = [r for r in IntentJournal(tmp_path / "j1.jsonl").records() if r["op"] == "decision"]
+    assert recs == [{"op": "decision", "value": "approved", "target": "target-1"}]
+    d, _, _ = coord(tmp_path, store=store, clock=clock)
+    assert d.decision() == "approved" and d.decision_target() == "target-1"
+    assert d.decide({"approved": True}, "target-1") == "approved"
+    assert journal_ops(tmp_path).count("decision") == 1
+
+
+def test_the_shown_target_is_recorded_not_the_one_current_at_click_time(tmp_path):
+    c, store, clock = paused_run(tmp_path)
+    TARGET["v"] = "current-now"  # the content changed after it was shown and before the click
+    assert c.decide({"approved": True}, "shown-to-user") == "approved"
+    assert c.decision_target() == "shown-to-user"
+    n, ops = count(store), journal_ops(tmp_path)
+    with pytest.raises(LifecycleBlocked):
+        c.run_approved(lambda: pytest.fail("must not resume"))
+    assert count(store) == n and journal_ops(tmp_path) == ops
+
+
+def test_changed_target_is_refused_before_any_lease_call_and_can_be_retried(tmp_path):
+    c, store, clock = paused_run(tmp_path)
+    c.decide({"approved": True}, "target-1")
+    TARGET["v"] = "target-2"
+    n, ops = count(store), journal_ops(tmp_path)
+    with pytest.raises(LifecycleBlocked):
+        c.run_approved(lambda: pytest.fail("must not resume"))
+    assert count(store) == n and journal_ops(tmp_path) == ops
+    TARGET["v"] = "target-1"
+    ran = []
+    assert c.run_approved(lambda: ran.append(1) or "finished") == "finished"
+    assert ran == [1]
+
+
+def test_changed_target_does_not_retry_an_open_intent_of_this_coordinator(tmp_path):
+    c, store, clock = paused_run(tmp_path)
+    c.decide({"approved": True}, "target-1")
+    c._fault = crash_at("after_intent")
+    with pytest.raises(Boom):
+        c.run_approved(lambda: pytest.fail("must not resume"))
+    c._fault = lambda point: None
+    n, ops = count(store), journal_ops(tmp_path)
+    TARGET["v"] = "target-2"
+    with pytest.raises(LifecycleBlocked):
+        c.run_approved(lambda: pytest.fail("must not resume"))
+    assert count(store) == n and journal_ops(tmp_path) == ops
+    assert [i["call"] for i in c._open_intents()] == ["acquire"]
+
+
+def test_target_is_checked_again_after_the_lease_is_held_and_the_lease_is_given_back(tmp_path):
+    c, store, clock = paused_run(tmp_path)
+    c.decide({"approved": True}, "target-1")
+    c._current_target = target_seq("target-1", "target-2")
+    with pytest.raises(LifecycleBlocked):
+        c.run_approved(lambda: pytest.fail("the stub must not run"))
+    assert kinds(store)[-2:] == ["lease_acquired", "lease_released"]
+    assert c.status().released is True
+    c._current_target = lambda: "target-1"
+    ran = []
+    assert c.run_approved(lambda: ran.append(1) or "finished") == "finished"
+    assert ran == [1] and kinds(store)[-2:] == ["lease_acquired", "lease_released"]
+
+
+def test_target_read_failure_before_the_lease_runs_nothing(tmp_path):
+    c, store, clock = paused_run(tmp_path)
+    c.decide({"approved": True}, "target-1")
+    c._current_target = target_seq(Boom())
+    n = count(store)
+    with pytest.raises(Boom):
+        c.run_approved(lambda: pytest.fail("must not resume"))
+    assert count(store) == n
+
+
+def test_target_read_failure_after_the_lease_is_held_leaves_it_held_and_runs_nothing(tmp_path):
+    c, store, clock = paused_run(tmp_path)
+    c.decide({"approved": True}, "target-1")
+    c._current_target = target_seq("target-1", Boom())
+    with pytest.raises(Boom):
+        c.run_approved(lambda: pytest.fail("the stub must not run"))
+    assert c.status().released is False
+    assert "resume_finished" not in journal_ops(tmp_path)
+
+
+def test_a_decision_without_a_recorded_target_never_resumes(tmp_path):
+    c, store, clock = paused_run(tmp_path)
+    c._append({"op": "decision", "value": "approved"})  # a record written without a target
+    assert c.decision() == "approved" and c.decision_target() is None
+    n = count(store)
+    with pytest.raises(LifecycleBlocked):
+        c.run_approved(lambda: pytest.fail("must not resume"))
+    assert count(store) == n
+    with pytest.raises(LifecycleBlocked):
+        c.decide({"approved": True}, "target-1")
+    assert journal_ops(tmp_path).count("decision") == 1
+
+
+def test_decide_refuses_a_different_value_or_target_and_accepts_an_exact_repeat(tmp_path):
+    c, store, clock = paused_run(tmp_path)
+    assert c.decide({"approved": True}, "t-a") == "approved"
+    assert c.decide({"approved": True}, "t-a") == "approved"
+    with pytest.raises(LifecycleBlocked):
+        c.decide({"approved": True}, "t-b")
+    with pytest.raises(LifecycleBlocked):
+        c.decide({"approved": False}, "t-a")
+    assert journal_ops(tmp_path).count("decision") == 1 and c.decision_target() == "t-a"
+
+
+def test_invalid_payload_records_nothing_and_reads_no_target(tmp_path):
+    c, store, clock = paused_run(tmp_path)
+    c._current_target = target_seq(Boom())
+    assert c.decide("nope", "target-1") == "invalid"
+    assert c.decide({"approved": "yes"}, "target-1") == "invalid"
+    assert c.decide({}, None) == "invalid"
+    assert "decision" not in journal_ops(tmp_path)
+
+
+def test_rejection_records_its_target_and_resume_reads_no_target(tmp_path):
+    c, store, clock = paused_run(tmp_path)
+    assert c.decide({"approved": False}, "target-1") == "rejected"
+    assert c.decision_target() == "target-1"
+    c._current_target = target_seq(Boom())
+    assert c.run_approved(lambda: pytest.fail("must not resume")) == "no_approved_decision"
+
+
+@pytest.mark.parametrize("bad", ["", "x" * 257, "line\nbreak", 5, None])
+def test_a_missing_or_bad_decision_target_is_refused_and_nothing_is_recorded(tmp_path, bad):
+    c, store, clock = paused_run(tmp_path)
+    with pytest.raises(LifecycleError):
+        c.decide({"approved": True}, bad)
+    assert "decision" not in journal_ops(tmp_path)
+    assert c.decision() is None
+
+
+def test_decide_without_a_target_argument_fails_and_never_reads_the_current_target(tmp_path):
+    c, store, clock = paused_run(tmp_path)
+    c._current_target = target_seq(Boom())  # must never be used to fill in a decision
+    with pytest.raises(TypeError):
+        c.decide({"approved": True})
+    c.decide({"approved": True}, "shown-1")
+    assert c.decision_target() == "shown-1"
+    assert journal_ops(tmp_path).count("decision") == 1
+
+
+@pytest.mark.parametrize("bad", ["", "x" * 257, 5])
+def test_a_bad_current_target_at_resume_runs_nothing(tmp_path, bad):
+    c, store, clock = paused_run(tmp_path)
+    c.decide({"approved": True}, "target-1")
+    TARGET["v"] = bad
+    n = count(store)
+    with pytest.raises(LifecycleError):
+        c.run_approved(lambda: pytest.fail("must not resume"))
+    assert count(store) == n
+
+
+def test_takeover_path_also_requires_the_approved_target(tmp_path):
+    a, store, clock = coord(tmp_path, name="a")
+    a.start()
+    a.acquire(needs_approved_decision=False)  # process dies holding the lease
+    b, _, _ = coord(tmp_path, store=store, clock=clock, name="b")
+    b.decide({"approved": True}, "target-1")
+    clock.adv(TTL + 1)
+    TARGET["v"] = "target-2"
+    n = count(store)
+    with pytest.raises(LifecycleBlocked):
+        b.run_approved(lambda: pytest.fail("must not resume"))
+    assert count(store) == n
+    TARGET["v"] = "target-1"
+    ran = []
+    assert b.run_approved(lambda: ran.append(1) or "finished") == "finished"
+    assert ran == [1] and kinds(store)[-2:] == ["lease_taken_over", "lease_released"]
+
+
+def test_a_new_process_after_a_restart_checks_the_recorded_target(tmp_path):
+    c, store, clock = paused_run(tmp_path)
+    c.decide({"approved": True}, "shown-1")
+    d, _, _ = coord(tmp_path, store=store, clock=clock)
+    TARGET["v"] = "target-1"
+    with pytest.raises(LifecycleBlocked):
+        d.run_approved(lambda: pytest.fail("must not resume"))
+    TARGET["v"] = "shown-1"
+    ran = []
+    assert d.run_approved(lambda: ran.append(1) or "finished") == "finished"
+    assert ran == [1]
+
+
+def test_already_finished_cleanup_does_not_need_the_target(tmp_path):
+    c, store, clock = paused_run(tmp_path)
+    c.decide({"approved": True}, "target-1")
+    c._fault = crash_at("after_resume")
+    with pytest.raises(Boom):
+        c.run_approved(lambda: "finished")
+    c._fault = lambda point: None
+    c._current_target = target_seq(Boom())  # the target is not read on this path
+    assert c.run_approved(lambda: pytest.fail("must not resume")) == "already_finished"
+    assert c.status().released is True
+
+
+def test_a_pause_for_a_new_target_cannot_be_approved_again_in_the_same_run(tmp_path):
+    c, store, clock = paused_run(tmp_path)
+    c.decide({"approved": True}, "target-1")
+    assert c.run_approved(lambda: "paused") == "paused"
+    TARGET["v"] = "target-2"  # the graph paused again with a different profile
+    n = count(store)
+    with pytest.raises(LifecycleBlocked):
+        c.run_approved(lambda: pytest.fail("must not resume"))
+    with pytest.raises(LifecycleBlocked):
+        c.decide({"approved": True}, "target-2")
+    assert count(store) == n and c.status().released is True
