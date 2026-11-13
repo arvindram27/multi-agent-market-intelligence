@@ -1,4 +1,4 @@
-"""Gatekeeper for the H1 control layer (slice 2b-iii, batches G1, G2a, G2b and G2c).
+"""Gatekeeper for the H1 control layer (slice 2b-iii, batches G1, G2a, G2b, G2c and G3c).
 
 One Gatekeeper serves one run. Every public method that writes opens exactly one
 ``AuditStore.transaction(ledger.LedgerProjection())``, verifies the committed
@@ -90,6 +90,14 @@ Contract
   ``ledger.expected_counters``, carries no overrun, may leave a token deficit, and
   closes the unknown once. The usage is a caller report, not provider proof. A write
   ``unknown`` has no reconciliation, and a reservation cannot be released without usage.
+- G3c adds ``current_lease``, a read-only report of the lease row of this run, read
+  through the same verified snapshot as ``event_status``. It writes nothing, creates no
+  file, reads no clock and takes no lease decision: it never says a lease is live or
+  expired, the caller compares ``expires_at`` with its own clock. The report is true only
+  for the committed chain at the moment of the read and can be out of date as soon as it
+  returns, so it does not fence anything, does not prove which process may act, and does
+  not make a recorded owner id usable by another worker. Owner ids stay one per worker
+  incarnation, and ``take_over_lease`` still re-checks the lease inside its own transaction.
 """
 from __future__ import annotations
 
@@ -146,6 +154,23 @@ class GatekeeperResult:
     event_id: str
     event_hash: str
     decision: admission.Decision | None = None
+
+
+@dataclass(frozen=True)
+class LeaseStatus:
+    # "present", "no_lease" (run started, never acquired), "run_absent" (verified chain
+    # without this run) or "verification_failed" (nothing can be said about the lease)
+    state: str
+    problems: tuple[str, ...] = ()
+    owner_id: str | None = None
+    epoch: int | None = None
+    expires_at: str | None = None
+    released: bool | None = None
+    released_at: str | None = None
+    last_event_id: str | None = None
+    lease_ttl_seconds: int | None = None  # frozen by run_started
+    head_seq: int | None = None  # the chain head this report was read at
+    head_hash: str | None = None
 
 
 @dataclass(frozen=True)
@@ -1051,10 +1076,30 @@ class Gatekeeper:
         appends. ``absent`` is reported only when the chain and the schema
         verified; anything unverifiable is ``verification_failed``.
         """
+        return self._read_snapshot(
+            lambda conn: self._snapshot(conn, event_id),
+            lambda *problems: EventStatus("verification_failed", tuple(problems)),
+        )
 
-        def failed(*problems: str) -> EventStatus:
-            return EventStatus("verification_failed", tuple(problems))
+    def current_lease(self) -> LeaseStatus:
+        """Read-only: the lease row of this run in a verified chain (G3c).
 
+        Same read-only connection and verification as ``event_status``; it never
+        writes, creates a file, runs DDL, reads the clock, calls admission or
+        appends, and it makes no decision about the lease. ``present`` carries the
+        recorded owner, epoch, expiry, released flag and last lease event id, and the
+        chain head the report was read at. ``no_lease`` means the run exists but no
+        lease was ever acquired; ``run_absent`` means the verified chain has no such
+        run (or no events); ``verification_failed`` says nothing about the lease.
+        The report can be out of date as soon as it returns. It does not show who may
+        act, does not fence an in-flight call, and gives no right to use the owner id.
+        """
+        return self._read_snapshot(
+            self._lease_snapshot,
+            lambda *problems: LeaseStatus("verification_failed", tuple(problems)),
+        )
+
+    def _read_snapshot(self, read, failed):
         path = self._db_path
         if not path.exists():
             return failed("audit database file does not exist")
@@ -1065,7 +1110,7 @@ class Gatekeeper:
         try:
             try:
                 conn.execute("BEGIN")
-                found = self._snapshot(conn, event_id)
+                found = read(conn)
                 conn.execute("COMMIT")
             except (sqlite3.Error, ValueError, TypeError, ledger.LedgerError) as exc:
                 try:
@@ -1077,13 +1122,12 @@ class Gatekeeper:
             conn.close()
         return found
 
-    def _snapshot(self, conn: sqlite3.Connection, event_id: str):
+    def _verified_snapshot(self, conn: sqlite3.Connection):
+        """(problems, rows, events, state, head); problems is empty only if everything verified."""
         for table, columns in _AUDIT_COLUMNS.items():
             info = conn.execute(f"PRAGMA table_info({table})").fetchall()
             if tuple(row[1] for row in info) != columns:
-                return EventStatus(
-                    "verification_failed", (f"audit table {table} is missing or malformed",)
-                )
+                return ((f"audit table {table} is missing or malformed",), [], [], None, None)
         rows = conn.execute(
             "SELECT seq, event_id, prev_hash, event_hash, payload "
             "FROM audit_events ORDER BY seq"
@@ -1094,7 +1138,7 @@ class Gatekeeper:
         head = (head_row[0], head_row[1]) if head_row else None
         problems = control.chain_problems(rows, head, allow_empty=True)
         if problems:
-            return EventStatus("verification_failed", tuple(problems))
+            return (tuple(problems), [], [], None, None)
         events = [
             control.event_from_payload(json.loads(row[4]), f"seq {row[0]}") for row in rows
         ]
@@ -1107,10 +1151,50 @@ class Gatekeeper:
         if rows or present:
             schema = ledger.schema_problems(conn)
             if schema:
-                return EventStatus("verification_failed", tuple(schema))
+                return (tuple(schema), [], [], None, None)
             mismatches = ledger.projection_problems(conn, state, head)
             if mismatches:
-                return EventStatus("verification_failed", tuple(mismatches))
+                return (tuple(mismatches), [], [], None, None)
+        return ((), rows, events, state, head)
+
+    def _lease_snapshot(self, conn: sqlite3.Connection) -> LeaseStatus:
+        problems, _rows, _events, state, head = self._verified_snapshot(conn)
+        if problems:
+            return LeaseStatus("verification_failed", problems)
+        seq, digest = head if head else (None, None)
+        run = state.runs.get(self._run_id)
+        if run is None:
+            return LeaseStatus("run_absent", head_seq=seq, head_hash=digest)
+        if run.thread_id != self._thread_id:
+            return LeaseStatus(
+                "verification_failed",
+                ("the run in the chain belongs to a different thread",),
+            )
+        lease = run.lease
+        if lease is None:
+            return LeaseStatus(
+                "no_lease",
+                lease_ttl_seconds=run.policy.lease_ttl_seconds,
+                head_seq=seq,
+                head_hash=digest,
+            )
+        return LeaseStatus(
+            "present",
+            owner_id=lease.owner_id,
+            epoch=lease.epoch,
+            expires_at=lease.expires_at,
+            released=lease.released,
+            released_at=lease.released_at,
+            last_event_id=lease.last_event_id,
+            lease_ttl_seconds=run.policy.lease_ttl_seconds,
+            head_seq=seq,
+            head_hash=digest,
+        )
+
+    def _snapshot(self, conn: sqlite3.Connection, event_id: str):
+        problems, rows, events, _state, _head = self._verified_snapshot(conn)
+        if problems:
+            return EventStatus("verification_failed", problems)
         for row, event in zip(rows, events):
             if row[1] == event_id:
                 return EventStatus(

@@ -19,6 +19,7 @@ import market_intelligence.ledger as ledger
 from market_intelligence.gatekeeper import (
     EventStatus,
     Gatekeeper,
+    LeaseStatus,
     GatekeeperClockError,
     GatekeeperError,
     GatekeeperLeaseError,
@@ -838,6 +839,193 @@ def test_event_status_path_quoting(tmp_path, name):
     gate.admit_llm(req(), decision_id)
     assert gate.event_status(decision_id).state == "present"
     assert sorted(os.listdir(tmp_path / name)) == ["audit.db"]
+
+
+# ------------------------------------------------------------ current lease (G3c)
+
+
+def lease_at(gate):
+    status = gate.current_lease()
+    assert isinstance(status, LeaseStatus)
+    return status
+
+
+def test_current_lease_reports_the_acquired_lease_and_the_chain_head(tmp_path):
+    store, clock, gate = make(tmp_path)
+    gate.start_run(eid())
+    acquire_id = eid()
+    gate.acquire_lease(acquire_id)
+    status = lease_at(gate)
+    assert status.state == "present" and status.problems == ()
+    assert status.owner_id == OWNER_A and status.epoch == 1 and status.released is False
+    assert status.released_at is None and status.last_event_id == acquire_id
+    assert status.lease_ttl_seconds == 300
+    assert datetime.fromisoformat(status.expires_at) == T0 + timedelta(seconds=300)
+    row = store._conn.execute("SELECT seq, event_hash FROM audit_head WHERE singleton = 1").fetchone()
+    assert (status.head_seq, status.head_hash) == (row[0], row[1]) and status.head_seq == count(store)
+
+
+def test_current_lease_has_exactly_the_documented_fields_and_no_liveness_verdict(tmp_path):
+    names = {field.name for field in dataclasses.fields(LeaseStatus)}
+    assert names == {
+        "state", "problems", "owner_id", "epoch", "expires_at", "released", "released_at",
+        "last_event_id", "lease_ttl_seconds", "head_seq", "head_hash",
+    }
+    store, clock, gate = boot(tmp_path)
+    clock.adv(100000)  # far past expiry: the report is unchanged, it never says expired
+    status = lease_at(gate)
+    assert status.state == "present" and status.released is False
+
+
+def test_current_lease_no_lease_run_absent_and_empty_store(tmp_path):
+    store, clock, gate = make(tmp_path / "a")
+    status = lease_at(gate)
+    assert status.state == "run_absent" and status.head_seq is None and status.owner_id is None
+    gate.start_run(eid())
+    status = lease_at(gate)
+    assert status.state == "no_lease" and status.owner_id is None and status.epoch is None
+    assert status.lease_ttl_seconds == 300 and status.head_seq == 1
+    gate.acquire_lease(eid())
+    assert lease_at(other(store, clock, run_id="run-2")).state == "run_absent"
+    assert lease_at(gate).state == "present"
+
+
+def test_current_lease_follows_renew_release_and_takeover(tmp_path):
+    store, clock, gate = boot(tmp_path)
+    first = lease_at(gate)
+    clock.adv(100)
+    renew_id = eid()
+    gate.renew_lease(renew_id)
+    renewed = lease_at(gate)
+    assert renewed.epoch == 1 and renewed.last_event_id == renew_id
+    assert datetime.fromisoformat(renewed.expires_at) > datetime.fromisoformat(first.expires_at)
+    assert renewed.head_seq == first.head_seq + 1 and renewed.head_hash != first.head_hash
+    clock.adv(1000)
+    second = other(store, clock, owner_id=OWNER_B)
+    take_id = eid()
+    second.take_over_lease(take_id)
+    taken = lease_at(second)
+    assert taken.owner_id == OWNER_B and taken.epoch == 2 and taken.released is False
+    assert taken.last_event_id == take_id
+    assert lease_at(gate).owner_id == OWNER_B  # the old owner's gatekeeper sees the same row
+    clock.adv(1)
+    second.release_lease(eid())
+    released = lease_at(second)
+    assert released.state == "present" and released.released is True
+    assert released.owner_id == OWNER_B and released.epoch == 2 and released.released_at is not None
+    assert released.expires_at == taken.expires_at  # release keeps the recorded expiry
+    verify(store)
+
+
+def test_current_lease_from_a_second_connection_and_a_different_owner(tmp_path):
+    store, clock, gate = boot(tmp_path)
+    reader_store = open_store(store.path)
+    reader = Gatekeeper(
+        reader_store, cfg(), run_id="run-1", thread_id="thread-1", owner_id=OWNER_B,
+        lease_ttl_seconds=300, now=NoClock(),
+    )
+    status = lease_at(reader)
+    assert status == lease_at(gate)
+    assert status.owner_id == OWNER_A  # the reader's own owner id plays no part
+
+
+def test_current_lease_writes_nothing_creates_no_file_and_reads_no_clock(tmp_path):
+    for name, used in (("empty", False), ("used", True)):
+        directory = tmp_path / name
+        store, clock, gate = boot(directory) if used else make(directory)
+        n = count(store) if used else None
+        before = fingerprint_of_files(directory)
+        silence(gate)
+        lease_at(gate)
+        lease_at(gate)
+        assert fingerprint_of_files(directory) == before
+        assert sorted(before) == ["audit.db"]
+        if used:
+            assert count(store) == n
+
+
+def test_current_lease_on_empty_store_does_not_create_ledger_tables(tmp_path):
+    store, clock, gate = make(tmp_path)
+    gate.current_lease()
+    names = {row[0] for row in store._conn.execute("SELECT name FROM sqlite_master")}
+    assert names.isdisjoint(set(ledger.COLUMNS))
+
+
+def test_current_lease_snapshot_is_not_updated_by_later_events(tmp_path):
+    store, clock, gate = boot(tmp_path)
+    old = lease_at(gate)
+    clock.adv(10)
+    gate.release_lease(eid())
+    assert old.released is False and old.state == "present"  # a value, not a live view
+    new = lease_at(gate)
+    assert new.released is True and new.head_seq == old.head_seq + 1
+
+
+def test_current_lease_projection_mismatch_is_verification_failed(tmp_path):
+    store, clock, gate = boot(tmp_path)
+    store._conn.execute("UPDATE run_leases SET owner_id = ?", (OWNER_B,))
+    status = lease_at(gate)
+    assert status.state == "verification_failed" and status.problems and status.owner_id is None
+    store._conn.execute("UPDATE run_leases SET owner_id = ?", (OWNER_A,))
+    assert lease_at(gate).state == "present"
+    store._conn.execute("UPDATE run_leases SET released = 1")
+    assert lease_at(gate).state == "verification_failed"
+
+
+def test_current_lease_corrupt_chain_and_schema_problems_are_not_run_absent(tmp_path):
+    store, clock, gate = boot(tmp_path / "chain")
+    store._conn.execute(
+        "UPDATE audit_events SET payload = replace(payload, 'gpt-4o-mini', 'gpt-4o-minx') WHERE seq = 1"
+    )
+    assert lease_at(gate).state == "verification_failed"
+    store, clock, gate = boot(tmp_path / "ledger")
+    store._conn.execute("DROP TABLE run_leases")
+    status = lease_at(gate)
+    assert status.state == "verification_failed" and status.owner_id is None
+    store, clock, gate = make(tmp_path / "partial")
+    store._conn.execute("CREATE TABLE run_leases (run_id TEXT)")
+    assert lease_at(gate).state == "verification_failed"
+
+
+def test_current_lease_busy_database_and_missing_file_are_verification_failed(tmp_path):
+    store, clock, gate = boot(tmp_path)
+    blocker = sqlite3.connect(str(store.path), isolation_level=None, timeout=0.0)
+    blocker.execute("BEGIN EXCLUSIVE")
+    try:
+        status = lease_at(gate)
+    finally:
+        blocker.execute("ROLLBACK")
+        blocker.close()
+    assert status.state == "verification_failed"
+    assert lease_at(gate).state == "present"
+    gate._db_path = tmp_path / "gone.db"
+    assert lease_at(gate).state == "verification_failed"
+    assert not (tmp_path / "gone.db").exists()
+
+
+def test_current_lease_for_another_thread_is_verification_failed(tmp_path):
+    store, clock, gate = boot(tmp_path)
+    status = lease_at(other(store, clock, thread_id="thread-2"))
+    assert status.state == "verification_failed" and status.owner_id is None and status.problems
+
+
+@pytest.mark.parametrize("name", ["with space", "hash#mark", "percent%25sign", "ampersand&q", "uni\u00e9dir"])
+def test_current_lease_path_quoting(tmp_path, name):
+    store, clock, gate = boot(tmp_path / name)
+    assert lease_at(gate).state == "present"
+    assert sorted(os.listdir(tmp_path / name)) == ["audit.db"]
+
+
+def test_event_status_still_answers_after_the_shared_snapshot_change(tmp_path):
+    store, clock, gate = make(tmp_path)
+    start_id, acquire_id = eid(), eid()
+    gate.start_run(start_id)
+    gate.acquire_lease(acquire_id)
+    status = gate.event_status(acquire_id)
+    assert status.state == "present" and status.event_kind == "lease_acquired"
+    assert status.lease_owner == OWNER_A and status.lease_epoch == 1 and status.run_matches is True
+    assert gate.event_status(start_id).event_kind == "run_started"
+    assert gate.event_status(eid()).state == "absent"
 
 
 # ------------------------------------------------------------ unit level
