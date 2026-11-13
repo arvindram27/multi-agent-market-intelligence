@@ -17,6 +17,7 @@ from langgraph.types import RetryPolicy
 from market_intelligence.agents.llm import get_llm
 from market_intelligence.budget import BudgetedLLM, RunTracker
 from market_intelligence.config import settings
+from market_intelligence.gatekeeper_llm import GatekeeperLLM
 from market_intelligence.graph.nodes import (
     analyze_news_tone_node,
     fetch_news_node,
@@ -53,6 +54,8 @@ def build_graph(
     writer: ProfileWriter | None = None,
     max_run_tokens: int | None = None,
     max_run_llm_calls: int | None = None,
+    gatekeeper=None,
+    token_counter=None,
 ):
     """Compile the workflow.
 
@@ -69,6 +72,10 @@ def build_graph(
             tests and the fixture demo pass it explicitly.
         max_run_tokens: Optional override for the per-run token ceiling.
         max_run_llm_calls: Optional override for the per-run LLM call ceiling.
+        gatekeeper: Optional started and leased Gatekeeper. When supplied, every
+            structured model call is admitted and recorded through it.
+        token_counter: Optional callable used only with ``gatekeeper`` to count the
+            prompt for admission. A missing or invalid count fails closed.
 
     Note:
         The compiled graph owns one shared run tracker. Build one graph per
@@ -79,6 +86,14 @@ def build_graph(
         max_calls=max_run_llm_calls or settings.max_run_llm_calls,
     )
     llm = BudgetedLLM(llm or get_llm(), tracker)
+    if gatekeeper is not None:
+        llm = GatekeeperLLM(
+            llm,
+            gatekeeper,
+            model_name=settings.openai_model,
+            max_output_tokens=settings.llm_max_output_tokens,
+            token_counter=token_counter,
+        )
 
     graph = StateGraph(MarketIntelligenceState)
 
