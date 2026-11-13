@@ -3,6 +3,7 @@
 They use the real AuditStore, the real LedgerProjection and the real admission
 functions, with a fake clock. Failure injection wraps the store connection.
 """
+import dataclasses
 import hashlib
 import json
 import os
@@ -1618,4 +1619,501 @@ def test_g2a_leaves_llm_admission_and_the_g1_surface_unchanged(tmp_path):
     gate.record_llm_outcome(decision_id, 98, 40, eid())
     state = run_state(store)
     assert state.fetch_count == 1 and state.calls == 1 and state.approved_target == "target-1"
+    verify(store)
+
+
+# ============================================================ G2b: write admission and write outcomes
+
+HASH = "ab" * 32
+
+
+def wreq(target="target-1"):
+    return adm.WriteRequest(target_id=target)
+
+
+def approved(path, target="target-1", **policy):
+    store, clock, gate = boot(path, **policy)
+    gate.approve(target, eid())
+    clock.adv(1)
+    return store, clock, gate
+
+
+def test_write_allowed_for_the_approved_target_records_target_hash_and_policy(tmp_path):
+    store, clock, gate = approved(tmp_path)
+    decision_id = eid()
+    result = gate.admit_write(wreq(), decision_id, content_hash=HASH.upper())
+    assert result.status == "applied" and result.decision.allow
+    event = last_event(store)
+    assert (event.event_kind, event.operation, event.decision, event.reason_code) == (
+        "decision", "write", "allow", "allowed",
+    )
+    assert event.target_id == "target-1" and event.content_hash == HASH and event.target_host is None
+    assert event.max_run_tokens == 20000 and event.allowed_model == "gpt-4o-mini" and not event.counters
+    assert (event.lease_owner, event.lease_epoch) == (OWNER_A, 1)
+    state = run_state(store)
+    assert (state.calls, state.fetch_count, state.reserved_tokens) == (0, 0, 0)
+    assert state.decisions[decision_id].operation == "write" and state.decisions[decision_id].target_id == "target-1"
+    status = gate.event_status(decision_id)
+    assert (status.state, status.target_id, status.content_hash) == ("present", "target-1", HASH)
+    verify(store)
+
+
+def test_write_without_a_content_hash_stores_none(tmp_path):
+    store, clock, gate = approved(tmp_path)
+    gate.admit_write(wreq(), eid())
+    assert last_event(store).content_hash is None
+    verify(store)
+
+
+def test_write_without_approval_is_a_recorded_unapproved_deny(tmp_path):
+    store, clock, gate = boot(tmp_path)
+    decision_id = eid()
+    result = gate.admit_write(wreq(), decision_id, content_hash=HASH)
+    assert result.status == "applied" and not result.decision.allow
+    event = last_event(store)
+    assert (event.decision, event.reason_code, event.operation) == ("deny", "unapproved_write", "write")
+    assert event.target_id == "target-1" and event.content_hash == HASH
+    assert run_state(store).decisions[decision_id].allow is False
+    verify(store)
+
+
+@pytest.mark.parametrize("target", ["target-2", "Target-1", "target-1x", "t"])
+def test_write_to_another_target_is_a_recorded_unapproved_deny(tmp_path, target):
+    store, clock, gate = approved(tmp_path)
+    result = gate.admit_write(wreq(target), eid())
+    assert not result.decision.allow
+    event = last_event(store)
+    assert (event.decision, event.reason_code, event.target_id) == ("deny", "unapproved_write", target)
+    verify(store)
+
+
+def test_denied_writes_never_block_a_later_allowed_write(tmp_path):
+    store, clock, gate = approved(tmp_path)
+    assert not gate.admit_write(wreq("other-1"), eid()).decision.allow
+    assert not gate.admit_write(wreq("other-2"), eid()).decision.allow
+    assert gate.admit_write(wreq(), eid()).decision.allow
+    verify(store)
+
+
+def test_write_requests_the_audit_layer_cannot_store_raise_before_append(tmp_path):
+    store, clock, gate = approved(tmp_path)
+    rows = count(store)
+    for bad in (adm.WriteRequest(target_id=None), wreq("x" * 129), "target-1", None, 5):
+        with pytest.raises(GatekeeperRequestError):
+            gate.admit_write(bad, eid())
+    for bad_hash in ("zz", "a" * 63, "a" * 65, 5, "", b"ab" * 32):
+        with pytest.raises(GatekeeperRequestError):
+            gate.admit_write(wreq(), eid(), content_hash=bad_hash)
+    for bad_id in ("", None, 5):
+        with pytest.raises(GatekeeperRequestError):
+            gate.admit_write(wreq(), bad_id)
+    assert count(store) == rows
+    assert gate.admit_write(wreq("x" * 128), eid()).decision.allow is False
+    verify(store)
+
+
+def test_write_needs_a_live_lease_owned_by_the_caller_a_matching_policy_and_a_forward_clock(tmp_path):
+    store, clock, gate = approved(tmp_path)
+    rows = count(store)
+    with pytest.raises(GatekeeperLeaseError):
+        other(store, clock, owner_id=OWNER_B).admit_write(wreq(), eid())
+    with pytest.raises(GatekeeperUnknownRun):
+        other(store, clock, run_id="run-2").admit_write(wreq(), eid())
+    with pytest.raises(GatekeeperPolicyMismatch):
+        other(store, clock, policy=cfg(max_fetches_per_run=9)).admit_write(wreq(), eid())
+    clock.adv(-2)
+    with pytest.raises(GatekeeperClockError):
+        gate.admit_write(wreq(), eid())
+    clock.adv(2)
+    expire(clock)
+    with pytest.raises(GatekeeperLeaseError):
+        gate.admit_write(wreq(), eid())
+    assert count(store) == rows
+
+
+def test_a_second_allowed_write_is_refused_while_the_first_has_no_outcome(tmp_path):
+    clock = CountingClock()
+    store, _, gate = make(tmp_path, clock=clock)
+    gate.start_run(eid())
+    gate.acquire_lease(eid())
+    gate.approve("target-1", eid())
+    first = eid()
+    clock.adv(1)
+    assert gate.admit_write(wreq(), first).decision.allow
+    rows, reads = count(store), clock.reads
+    with pytest.raises(GatekeeperStateError, match=first) as caught:
+        gate.admit_write(wreq(), eid())
+    assert "no outcome" in str(caught.value)
+    assert count(store) == rows and clock.reads == reads
+    assert not gate.admit_write(wreq("other"), eid()).decision.allow  # a deny is still recorded
+    verify(store)
+
+
+@pytest.mark.parametrize("value", ["committed", "unknown"])
+def test_a_second_allowed_write_is_refused_after_committed_or_unknown(tmp_path, value):
+    store, clock, gate = approved(tmp_path)
+    first = eid()
+    gate.admit_write(wreq(), first)
+    gate.record_write_outcome(first, value, eid())
+    rows = count(store)
+    with pytest.raises(GatekeeperStateError, match=first) as caught:
+        gate.admit_write(wreq(), eid())
+    assert value in str(caught.value)
+    assert count(store) == rows
+    verify(store)
+
+
+def test_failed_lets_exactly_one_new_write_through_and_the_new_one_blocks_in_turn(tmp_path):
+    store, clock, gate = approved(tmp_path)
+    first, second = eid(), eid()
+    gate.admit_write(wreq(), first)
+    gate.record_write_outcome(first, "failed", eid())
+    assert gate.admit_write(wreq(), second).decision.allow
+    with pytest.raises(GatekeeperStateError, match=second):
+        gate.admit_write(wreq(), eid())
+    gate.record_write_outcome(second, "failed", eid())
+    third = eid()
+    assert gate.admit_write(wreq(), third).decision.allow
+    gate.record_write_outcome(third, "committed", eid())
+    with pytest.raises(GatekeeperStateError, match=third):
+        gate.admit_write(wreq(), eid())
+    verify(store)
+
+
+def test_unit_the_guard_looks_at_every_earlier_allowed_write_not_only_the_latest(tmp_path):
+    store, clock, gate = approved(tmp_path)
+    first, second = eid(), eid()
+    gate.admit_write(wreq(), first)
+    gate.record_write_outcome(first, "failed", eid())
+    gate.admit_write(wreq(), second)
+    gate.record_write_outcome(second, "failed", eid())
+    events = stored_events(store)
+    assert gate._blocking_write(events) is None
+    # no input reaches this through the public methods, so the unit check removes an earlier outcome by hand
+    pruned = [e for e in events if not (e.event_kind == "outcome" and e.references_event_id == first)]
+    assert gate._blocking_write(pruned) == (first, "no outcome")
+    flipped = [
+        dataclasses.replace(e, write_outcome="unknown")
+        if (e.event_kind == "outcome" and e.references_event_id == first)
+        else e
+        for e in events
+    ]
+    assert gate._blocking_write(flipped) == (first, "unknown")
+
+
+def test_writes_of_another_run_in_the_same_chain_do_not_block_this_run(tmp_path):
+    store, clock, gate = approved(tmp_path)
+    second = other(store, clock, run_id="run-2", owner_id=OWNER_B)
+    second.start_run(eid())
+    second.acquire_lease(eid())
+    second.approve("target-1", eid())
+    clock.adv(1)
+    foreign = eid()
+    assert second.admit_write(wreq(), foreign).decision.allow  # open in run-2
+    assert gate.admit_write(wreq(), eid()).decision.allow  # run-1 unaffected
+    with pytest.raises(GatekeeperStateError):
+        gate.admit_write(wreq(), eid())  # now run-1 is blocked by its own write
+    with pytest.raises(GatekeeperStateError, match=foreign):
+        second.admit_write(wreq(), eid())  # and run-2 by its own
+    verify(store)
+
+
+@pytest.mark.parametrize("value", ["committed", "failed", "unknown"])
+def test_write_outcome_records_the_caller_value_and_derives_retry_safe(tmp_path, value):
+    store, clock, gate = approved(tmp_path)
+    decision_id, outcome_id = eid(), eid()
+    gate.admit_write(wreq(), decision_id, content_hash=HASH)
+    clock.adv(3)
+    result = gate.record_write_outcome(decision_id, value, outcome_id)
+    assert result.status == "applied" and result.decision is None
+    event = last_event(store)
+    assert (event.event_kind, event.operation, event.decision, event.reason_code) == (
+        "outcome", "write", "allow", "allowed",
+    )
+    assert event.write_outcome == value and event.retry_safe is (value == "failed")
+    assert event.references_event_id == decision_id and not event.counters
+    assert event.target_id is None and event.content_hash is None and event.target_host is None
+    assert event.result_class is None and event.reserve_tokens is None
+    assert (event.lease_owner, event.lease_epoch) == (OWNER_A, 1)
+    state = run_state(store)
+    assert decision_id in state.normal_outcomes and state.reserved_tokens == 0 and not state.unknown_outcomes
+    status = gate.event_status(outcome_id)
+    assert (status.write_outcome, status.references_event_id, status.target_id) == (value, decision_id, None)
+    assert gate.event_status(decision_id).outcome_event_id == outcome_id
+    verify(store)
+
+
+def test_write_outcome_refusals_write_nothing(tmp_path):
+    store, clock, gate = approved(tmp_path)
+    llm_id, fetch_id, deny_id, ok_id = eid(), eid(), eid(), eid()
+    gate.admit_llm(req(), llm_id)
+    gate.admit_fetch(freq(), fetch_id)
+    gate.admit_write(wreq("other"), deny_id)
+    gate.admit_write(wreq(), ok_id)
+    rows = count(store)
+    for decision_id in (eid(), deny_id, fetch_id, llm_id, "", None, 5, []):
+        with pytest.raises(GatekeeperRequestError):
+            gate.record_write_outcome(decision_id, "committed", eid())
+    for bad in ("bogus", None, 5, "", "COMMITTED", "retry_safe", True):
+        with pytest.raises(GatekeeperRequestError):
+            gate.record_write_outcome(ok_id, bad, eid())
+    assert count(store) == rows
+    gate.record_write_outcome(ok_id, "committed", eid())
+    rows = count(store)
+    for value in ("committed", "failed", "unknown"):
+        with pytest.raises(GatekeeperRequestError):
+            gate.record_write_outcome(ok_id, value, eid())
+    assert count(store) == rows
+    verify(store)
+
+
+def test_write_outcome_needs_a_live_lease_owned_by_the_caller(tmp_path):
+    store, clock, gate = approved(tmp_path)
+    decision_id = eid()
+    gate.admit_write(wreq(), decision_id)
+    rows = count(store)
+    with pytest.raises(GatekeeperLeaseError):
+        other(store, clock, owner_id=OWNER_B).record_write_outcome(decision_id, "failed", eid())
+    with pytest.raises(GatekeeperUnknownRun):
+        other(store, clock, run_id="run-2").record_write_outcome(decision_id, "failed", eid())
+    with pytest.raises(GatekeeperPolicyMismatch):
+        other(store, clock, policy=cfg(max_fetches_per_run=9)).record_write_outcome(decision_id, "failed", eid())
+    clock.adv(-2)
+    with pytest.raises(GatekeeperClockError):
+        gate.record_write_outcome(decision_id, "failed", eid())
+    clock.adv(2)
+    expire(clock)
+    with pytest.raises(GatekeeperLeaseError):
+        gate.record_write_outcome(decision_id, "failed", eid())
+    assert count(store) == rows
+
+
+def test_write_decision_duplicate_uses_the_state_before_the_stored_event_and_no_clock(tmp_path, no_system_clock):
+    store, clock, gate = approved(tmp_path)
+    decision_id = eid()
+    clock.adv(1)
+    first = gate.admit_write(wreq(), decision_id, content_hash=HASH)
+    clock.adv(1)
+    gate.record_write_outcome(decision_id, "unknown", eid())  # the run is now blocked for new writes
+    gate.admit_fetch(freq(), eid())
+    expire(clock)
+    silence(gate)
+    rows = count(store)
+    again = gate.admit_write(wreq(), decision_id, content_hash=HASH.upper())
+    assert again.status == "already_applied" and again.event_hash == first.event_hash and again.decision.allow
+    assert count(store) == rows
+    verify(store)
+
+
+def test_a_denied_write_duplicate_stays_a_deny_after_the_approval_exists(tmp_path, no_system_clock):
+    store, clock, gate = boot(tmp_path)
+    deny_id = eid()
+    clock.adv(1)
+    assert not gate.admit_write(wreq(), deny_id, content_hash=HASH).decision.allow
+    clock.adv(1)
+    gate.approve("target-1", eid())
+    silence(gate)
+    again = gate.admit_write(wreq(), deny_id, content_hash=HASH)
+    assert again.status == "already_applied" and not again.decision.allow
+    verify(store)
+
+
+def test_a_repeated_write_event_id_with_a_changed_request_is_refused_not_confirmed(tmp_path):
+    store, clock, gate = approved(tmp_path)
+    allowed_id, deny_id = eid(), eid()
+    gate.admit_write(wreq(), allowed_id, content_hash=HASH)
+    gate.admit_write(wreq("other"), deny_id, content_hash=HASH)
+    rows = count(store)
+    for event_id, target, digest in (
+        (allowed_id, "target-2", HASH),
+        (allowed_id, "target-1", "cd" * 32),
+        (allowed_id, "target-1", None),
+        (deny_id, "other", "cd" * 32),
+        (deny_id, "other", None),
+        (deny_id, "another", HASH),
+        (deny_id, "target-1", HASH),
+    ):
+        with pytest.raises(control.AuditIncomplete):
+            gate.admit_write(wreq(target), event_id, content_hash=digest)
+    assert count(store) == rows
+    verify(store)
+
+
+def test_a_repeated_outcome_event_id_with_a_different_value_is_refused_not_confirmed(tmp_path, no_system_clock):
+    store, clock, gate = approved(tmp_path)
+    decision_id, outcome_id, other_decision = eid(), eid(), eid()
+    gate.admit_write(wreq(), decision_id)
+    first = gate.record_write_outcome(decision_id, "committed", outcome_id)
+    clock.adv(1)
+    gate.admit_fetch(freq(), eid())
+    expire(clock)
+    silence(gate)
+    rows = count(store)
+    again = gate.record_write_outcome(decision_id, "committed", outcome_id)
+    assert again.status == "already_applied" and again.event_hash == first.event_hash
+    for value in ("failed", "unknown"):
+        with pytest.raises(control.AuditIncomplete):
+            gate.record_write_outcome(decision_id, value, outcome_id)
+    with pytest.raises(GatekeeperRequestError):
+        gate.record_write_outcome(eid(), "committed", outcome_id)  # unknown decision
+    with pytest.raises(GatekeeperRequestError):
+        gate.record_write_outcome(other_decision, "committed", outcome_id)
+    with pytest.raises(GatekeeperRequestError):
+        gate.record_write_outcome(decision_id, "committed", eid())  # a second outcome under a new id
+    assert count(store) == rows
+    verify(store)
+
+
+def test_write_duplicates_by_another_owner_are_refused(tmp_path):
+    store, clock, gate = approved(tmp_path)
+    decision_id, outcome_id = eid(), eid()
+    gate.admit_write(wreq(), decision_id)
+    gate.record_write_outcome(decision_id, "failed", outcome_id)
+    second = other(store, clock, owner_id=OWNER_B)
+    with pytest.raises(GatekeeperRequestError):
+        second.admit_write(wreq(), decision_id)
+    with pytest.raises(GatekeeperRequestError):
+        second.record_write_outcome(decision_id, "failed", outcome_id)
+
+
+def test_a_second_owner_closes_an_earlier_write_after_handover_and_unknown_still_blocks(tmp_path):
+    store, clock, gate = approved(tmp_path)
+    decision_id = eid()
+    gate.admit_write(wreq(), decision_id)
+    expire(clock)
+    gate.release_lease(eid())
+    second = other(store, clock, owner_id=OWNER_B)
+    second.acquire_lease(eid())
+    outcome_id = eid()
+    assert second.record_write_outcome(decision_id, "unknown", outcome_id).status == "applied"
+    event = last_event(store)
+    assert (event.lease_owner, event.lease_epoch, event.write_outcome) == (OWNER_B, 2, "unknown")
+    rows = count(store)
+    with pytest.raises(GatekeeperStateError, match="unknown"):
+        second.admit_write(wreq(), eid())
+    assert gate.admit_write(wreq(), decision_id).status == "already_applied"  # the first owner can still confirm
+    assert count(store) == rows
+    verify(store)
+
+
+def _g2b_calls(gate, ids):
+    return {
+        "write": lambda: gate.admit_write(wreq(), ids["write"], content_hash=HASH),
+        "outcome": lambda: gate.record_write_outcome(ids["write"], "failed", ids["outcome"]),
+    }
+
+
+@pytest.mark.parametrize("method", ["write", "outcome"])
+@pytest.mark.parametrize("mode,expected", [("landed", "already_applied"), ("absent", "applied")])
+def test_unknown_commit_on_each_write_method_is_execute_or_confirm(tmp_path, method, mode, expected):
+    store, clock, gate = approved(tmp_path)
+    ids = {name: eid() for name in ("write", "outcome")}
+    calls = _g2b_calls(gate, ids)
+    if method == "outcome":
+        calls["write"]()
+    clock.adv(10)
+    real = store._conn
+    store._conn = Wrap(real, mode)
+    with pytest.raises(control.ControlUnavailable) as caught:
+        calls[method]()
+    assert caught.value.append_state == "unknown"
+    store._conn = real
+    assert gate.event_status(ids[method]).state == ("present" if mode == "landed" else "absent")
+    clock.adv(2)
+    assert calls[method]().status == expected
+    assert store._conn.execute(
+        "SELECT count(*) FROM audit_events WHERE event_id = ?", (ids[method],)
+    ).fetchone()[0] == 1
+    verify(store)
+
+
+@pytest.mark.parametrize("needle", [READ_CHAIN, INSERT_EVENT])
+@pytest.mark.parametrize("method", ["write", "outcome"])
+def test_sqlite_error_in_a_write_method_propagates_unchanged_after_a_confirmed_rollback(tmp_path, method, needle):
+    store, clock, gate = approved(tmp_path)
+    ids = {name: eid() for name in ("write", "outcome")}
+    calls = _g2b_calls(gate, ids)
+    if method == "outcome":
+        calls["write"]()
+    clock.adv(10)
+    real = store._conn
+    rows = count(store)
+    store._conn = FailOn(real, needle)
+    with pytest.raises(sqlite3.OperationalError, match="injected statement failure") as caught:
+        calls[method]()
+    assert not isinstance(caught.value, control.ControlUnavailable)
+    store._conn = real
+    assert count(store) == rows and real.in_transaction is False
+    verify(store)
+
+
+def test_each_new_write_event_reads_the_injected_clock_once_and_duplicates_never(tmp_path, no_system_clock):
+    clock = CountingClock()
+    store, _, gate = make(tmp_path, clock=clock)
+    gate.start_run(eid())
+    gate.acquire_lease(eid())
+    gate.approve("target-1", eid())
+    ids = {name: eid() for name in ("deny", "write", "outcome")}
+    steps = (
+        lambda: gate.admit_write(wreq("other"), ids["deny"]),
+        lambda: gate.admit_write(wreq(), ids["write"], content_hash=HASH),
+        lambda: gate.record_write_outcome(ids["write"], "unknown", ids["outcome"]),
+    )
+    for step in steps:
+        before = clock.reads
+        clock.adv(5)
+        step()
+        assert clock.reads == before + 1
+    reads, rows = clock.reads, count(store)
+    silence(gate)
+    for step in steps:
+        assert step().status == "already_applied"
+    assert clock.reads == reads and count(store) == rows
+    events = stored_events(store)[3:]
+    for index, event in enumerate(events):
+        stamped = T0 + timedelta(seconds=5 * (index + 1))
+        assert datetime.fromisoformat(event.recorded_at) == stamped
+        assert datetime.fromisoformat(event.observed_now) == stamped
+    verify(store)
+
+
+def test_event_status_reports_the_write_fields_and_the_outcome_id_and_stays_read_only(tmp_path):
+    store, clock, gate = approved(tmp_path)
+    ids = {name: eid() for name in ("deny", "write", "outcome", "fetch", "fetch_outcome")}
+    gate.admit_write(wreq("other"), ids["deny"], content_hash=HASH)
+    gate.admit_write(wreq(), ids["write"], content_hash=HASH)
+    gate.admit_fetch(freq(), ids["fetch"])
+    gate.record_fetch_outcome(ids["fetch"], "ok", ids["fetch_outcome"])
+    before = fingerprint_of_files(tmp_path)
+    rows = count(store)
+    status = gate.event_status(ids["write"])
+    assert (status.target_id, status.content_hash, status.write_outcome, status.outcome_event_id) == (
+        "target-1", HASH, None, None,
+    )
+    assert gate.event_status(ids["deny"]).reason_code == "unapproved_write"
+    assert gate.event_status(ids["fetch"]).outcome_event_id == ids["fetch_outcome"]
+    gate.record_write_outcome(ids["write"], "committed", ids["outcome"])
+    assert gate.event_status(ids["write"]).outcome_event_id == ids["outcome"]
+    assert gate.event_status(ids["deny"]).outcome_event_id is None
+    assert gate.event_status(ids["outcome"]).outcome_event_id is None
+    assert gate.event_status(eid()).write_outcome is None
+    before = fingerprint_of_files(tmp_path)
+    rows = count(store)
+    gate.event_status(ids["write"])
+    assert fingerprint_of_files(tmp_path) == before and count(store) == rows
+
+
+def test_write_leaves_llm_fetch_and_approval_behaviour_unchanged(tmp_path):
+    store, clock, gate = approved(tmp_path)
+    write_id = eid()
+    gate.admit_write(wreq(), write_id)
+    decision_id = eid()
+    assert gate.admit_llm(req(), decision_id).decision.allow
+    gate.record_llm_outcome(decision_id, 98, 40, eid())
+    assert gate.admit_fetch(freq(), eid()).decision.allow
+    with pytest.raises(GatekeeperStateError):
+        gate.approve("target-2", eid())
+    state = run_state(store)
+    assert (state.calls, state.fetch_count, state.approved_target) == (1, 1, "target-1")
+    assert state.reserved_tokens == 0 and write_id in state.decisions and write_id not in state.normal_outcomes
     verify(store)

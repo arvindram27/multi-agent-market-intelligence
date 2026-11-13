@@ -1,4 +1,4 @@
-"""Gatekeeper for the H1 control layer (slice 2b-iii, batches G1 and G2a).
+"""Gatekeeper for the H1 control layer (slice 2b-iii, batches G1, G2a and G2b).
 
 One Gatekeeper serves one run. Every public method that writes opens exactly one
 ``AuditStore.transaction(ledger.LedgerProjection())``, verifies the committed
@@ -58,7 +58,20 @@ Contract
   caller owns the mapping from net.py errors. Owner ids must be unique per worker
   incarnation: lease checks compare owner strings, and nothing here fences an
   external call already in flight across expiry.
-- Write, takeover and reconciliation are not in this batch.
+- G2b adds ``admit_write`` and ``record_write_outcome`` with the same execute-or-confirm
+  rules. A write is allowed only for the exact target the run approved; no approval or
+  a different target is a recorded ``unapproved_write`` deny. A new allowed write is
+  REFUSED, with no event written, while any earlier allowed write of this run has no
+  outcome, or an outcome of ``committed`` or ``unknown``; only ``failed`` lets a new
+  one through, and ``failed`` is the caller's report, not proof that nothing happened
+  outside. A refused write attempt leaves no audit event. The guard reads the verified
+  event list, because the ledger does not keep the write outcome. ``unknown`` is never
+  cleared here and an open write is never closed here (takeover and reconcile are G2c).
+  ``committed``, ``failed`` and ``unknown`` are caller reports; the chain proves only
+  that a lease owner recorded them. A repeated event id is rebuilt from the request, so
+  a different target, content hash or outcome is refused, not confirmed. The content
+  hash is a caller-supplied SHA-256 hint; the gatekeeper never computes or checks it.
+- Takeover and reconciliation are not in this batch.
 """
 from __future__ import annotations
 
@@ -136,6 +149,10 @@ class EventStatus:
     references_event_id: str | None = None
     lease_owner: str | None = None
     lease_epoch: int | None = None
+    target_id: str | None = None
+    content_hash: str | None = None
+    write_outcome: str | None = None
+    outcome_event_id: str | None = None  # for a decision event: its normal outcome event id, if any
 
 
 MAX_TARGET_ID_LEN = 128
@@ -765,6 +782,134 @@ class Gatekeeper:
 
         return self._execute(event_id, "outcome", "fetch", build)
 
+    # --------------------------------------------------------- write (G2b)
+
+    def _blocking_write(self, events: list[control.AuditEvent]) -> tuple[str, str] | None:
+        """The first earlier allowed write decision of THIS run that blocks a new one.
+
+        Returns (decision event id, "no outcome" | "committed" | "unknown"), or None.
+        Only ``failed`` does not block. Other runs and denied decisions are ignored.
+        """
+        mine = [
+            event
+            for event in events
+            if event.run_id == self._run_id and event.thread_id == self._thread_id
+        ]
+        outcomes: dict[str, str | None] = {}
+        for event in mine:
+            if event.event_kind == "outcome" and event.operation == "write":
+                outcomes.setdefault(event.references_event_id, event.write_outcome)
+        for event in mine:
+            if (
+                event.event_kind == "decision"
+                and event.operation == "write"
+                and event.decision == "allow"
+            ):
+                outcome = outcomes.get(event.event_id)
+                if outcome is None:
+                    return event.event_id, "no outcome"
+                if outcome != "failed":
+                    return event.event_id, outcome
+        return None
+
+    def admit_write(
+        self,
+        request: admission.WriteRequest,
+        event_id: str,
+        *,
+        content_hash: str | None = None,
+    ) -> GatekeeperResult:
+        if not isinstance(request, admission.WriteRequest):
+            raise GatekeeperRequestError("request must be a WriteRequest")
+        if request.target_id is None:
+            raise GatekeeperRequestError("a write needs a target_id")
+        target = self._checked_text(request.target_id, "target_id")
+        try:
+            digest = control._content_hash(content_hash)
+        except (ValueError, TypeError) as exc:
+            raise GatekeeperRequestError(
+                "content_hash must be a 64-character hexadecimal SHA-256"
+            ) from exc
+
+        def build(state, prior, events, stored):
+            run = self._run_of(state)
+            basis = self._run_of(prior)
+            view = admission.RunView(
+                calls=basis.calls,
+                prompt_tokens=basis.prompt_tokens,
+                completion_tokens=basis.completion_tokens,
+                reserved_tokens=basis.reserved_tokens,
+                fetch_count=basis.fetch_count,
+                approved=basis.approved_target is not None and basis.approved_target == target,
+            )
+            decision = admission.decide_write(request, view, self._policy)
+            if stored is None and decision.allow:
+                blocker = self._blocking_write(events)
+                if blocker is not None:
+                    raise GatekeeperStateError(
+                        f"an earlier allowed write ({blocker[0]}) has {blocker[1]}; "
+                        "no new allowed write is possible for this run"
+                    )
+            observed, owner, epoch, recorded = self._binding(run, stored, events)
+            event = self._event(
+                recorded,
+                event_id=event_id,
+                operation="write",
+                event_kind="decision",
+                decision="allow" if decision.allow else "deny",
+                reason_code=decision.reason.value,
+                counters={},
+                target_id=target,
+                content_hash=digest,
+                lease_owner=owner,
+                lease_epoch=epoch,
+                observed_now=observed,
+                **self._policy_fields(),
+            )
+            return event, decision
+
+        return self._execute(event_id, "decision", "write", build)
+
+    def record_write_outcome(
+        self,
+        decision_event_id: str,
+        write_outcome: str,
+        event_id: str,
+    ) -> GatekeeperResult:
+        if not isinstance(decision_event_id, str) or not decision_event_id:
+            raise GatekeeperRequestError("decision_event_id must be a non-empty string")
+        if not isinstance(write_outcome, str) or write_outcome not in control.WRITE_OUTCOMES:
+            raise GatekeeperRequestError("write_outcome must be committed, failed or unknown")
+
+        def build(state, prior, events, stored):
+            run = self._run_of(state)
+            basis = self._run_of(prior)
+            if stored is not None and stored.references_event_id != decision_event_id:
+                raise GatekeeperRequestError("event_id references a different decision")
+            decision = basis.decisions.get(decision_event_id)
+            if decision is None or not decision.allow or decision.operation != "write":
+                raise GatekeeperRequestError("the decision is not a known allowed write decision")
+            if decision_event_id in basis.normal_outcomes:
+                raise GatekeeperRequestError("the decision already has an outcome")
+            observed, owner, epoch, recorded = self._binding(run, stored, events)
+            event = self._event(
+                recorded,
+                event_id=event_id,
+                operation="write",
+                event_kind="outcome",
+                decision="allow",
+                reason_code="allowed",
+                counters={},
+                write_outcome=write_outcome,
+                references_event_id=decision_event_id,
+                lease_owner=owner,
+                lease_epoch=epoch,
+                observed_now=observed,
+            )
+            return event, None
+
+        return self._execute(event_id, "outcome", "write", build)
+
     # ---------------------------------------------------------- event status
 
     def event_status(self, event_id: str) -> EventStatus:
@@ -856,5 +1001,21 @@ class Gatekeeper:
                     references_event_id=event.references_event_id,
                     lease_owner=event.lease_owner,
                     lease_epoch=event.lease_epoch,
+                    target_id=event.target_id,
+                    content_hash=event.content_hash,
+                    write_outcome=event.write_outcome,
+                    outcome_event_id=self._outcome_of(event, events),
                 )
         return EventStatus("absent")
+
+    @staticmethod
+    def _outcome_of(event: control.AuditEvent, events: list[control.AuditEvent]) -> str | None:
+        if event.event_kind != "decision":
+            return None
+        for later in events:
+            if (
+                later.event_kind == "outcome"
+                and later.references_event_id == event.event_id
+            ):
+                return later.event_id
+        return None
