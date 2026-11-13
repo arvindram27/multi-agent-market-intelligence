@@ -256,7 +256,7 @@ def test_invalid_reported_usage_is_never_zero(store, usage):
     assert gate.event_status(outcome_id).reason_code == "usage_missing"
 
 
-def test_model_exception_leaves_open_reservation(store):
+def test_model_exception_records_unknown_outcome_and_holds_the_reservation(store):
     gate = make_gate(
         store,
         policy=cfg(
@@ -277,13 +277,72 @@ def test_model_exception_leaves_open_reservation(store):
         adapter.with_structured_output(NewsDigest).invoke("prompt")
     assert info.value is error
     assert inner.calls == 1
-    decision_id = adapter.events[0][0]
+    decision_id, outcome_id = adapter.events[0]
+    assert outcome_id is not None
     state = run_state(store)
     assert state.decisions[decision_id].allow is True
+    assert gate.event_status(decision_id).outcome_event_id == outcome_id
+    assert gate.event_status(outcome_id).reason_code == "usage_missing"
+    reservation = next(iter(state.reservations.values()))
+    assert reservation.status == "unknown"
+    # Held, not freed and not recorded as zero spend.
     assert state.reserved_tokens > 0
-    assert gate.event_status(decision_id).outcome_event_id is None
+    assert (state.prompt_tokens, state.completion_tokens) == (0, 0)
     with pytest.raises(GatekeeperDenied):
         adapter.with_structured_output(NewsDigest).invoke("again")
+
+
+def test_failed_call_unknown_outcome_can_be_reconciled(store):
+    gate = make_gate(store)
+    adapter = make_adapter(gate, FakeAdapterModel(error=RuntimeError("model failed")))
+    with pytest.raises(RuntimeError):
+        adapter.with_structured_output(NewsDigest).invoke("prompt")
+    outcome_id = adapter.events[0][1]
+    assert outcome_id is not None
+    assert run_state(store).reserved_tokens > 0
+    # Test-supplied usage closes the unknown; this is not provider proof.
+    gate.reconcile_llm_outcome(outcome_id, 5, 5, str(uuid.uuid4()))
+    state = run_state(store)
+    assert (state.prompt_tokens, state.completion_tokens, state.reserved_tokens) == (
+        5,
+        5,
+        0,
+    )
+
+
+def test_model_exception_recording_failure_does_not_replace_the_original(store):
+    clock = Clock()
+    gate = make_gate(store, clock=clock)
+    error = RuntimeError("model failed")
+    inner = FakeAdapterModel(error=error, before_return=lambda: clock.adv(301))
+    adapter = make_adapter(gate, inner)
+    with pytest.raises(RuntimeError) as info:
+        adapter.with_structured_output(NewsDigest).invoke("prompt")
+    assert info.value is error
+    assert inner.calls == 1
+    decision_id, outcome_id = adapter.events[0]
+    assert outcome_id is None
+    assert gate.event_status(decision_id).outcome_event_id is None
+    assert run_state(store).reserved_tokens > 0
+
+
+def test_each_failed_invocation_holds_its_own_reservation(store):
+    gate = make_gate(store)
+    inner = FakeAdapterModel(error=RuntimeError("model failed"))
+    adapter = make_adapter(gate, inner)
+    held = []
+    for _ in range(3):
+        with pytest.raises(RuntimeError):
+            adapter.with_structured_output(NewsDigest).invoke("prompt")
+        held.append(run_state(store).reserved_tokens)
+    assert inner.calls == 3
+    assert held[0] > 0
+    assert held == [held[0], 2 * held[0], 3 * held[0]]
+    assert len({decision for decision, _ in adapter.events}) == 3
+    assert len({outcome for _, outcome in adapter.events}) == 3
+    assert all(outcome is not None for _, outcome in adapter.events)
+    state = run_state(store)
+    assert [r.status for r in state.reservations.values()] == ["unknown"] * 3
 
 
 def test_outcome_failure_surfaces_without_success(store):

@@ -127,14 +127,18 @@ class _GatedStructured:
             raise GatekeeperDenied(decision)
 
         capture = _UsageCapture()
-        config = dict(kwargs.pop("config", None) or {})
-        callbacks = list(config.get("callbacks", []) or [])
-        callbacks.append(capture)
-        config["callbacks"] = callbacks
-        kwargs["config"] = config
+        try:
+            config = dict(kwargs.pop("config", None) or {})
+            callbacks = list(config.get("callbacks", []) or [])
+            callbacks.append(capture)
+            config["callbacks"] = callbacks
+            kwargs["config"] = config
 
-        inner = adapter._inner.with_structured_output(self._schema)
-        result_value = inner.invoke(prompt, **kwargs)
+            inner = adapter._inner.with_structured_output(self._schema)
+            result_value = inner.invoke(prompt, **kwargs)
+        except Exception:
+            adapter._record_unknown_outcome(decision_id, event_index)
+            raise
 
         usage = capture.usage()
         outcome_id = str(uuid.uuid4())
@@ -183,6 +187,23 @@ class GatekeeperLLM:
         if type(value) is not int or value < 0:
             return None
         return value
+
+    def _record_unknown_outcome(self, decision_id: str, event_index: int) -> None:
+        """Record unknown usage for an admitted call that raised.
+
+        The reservation stays held. If this record cannot be written, the
+        failure is swallowed so the original model error still reaches the
+        caller, and the trace stays as it was before the call raised.
+        """
+        try:
+            outcome_id = str(uuid.uuid4())
+            with self._lock:
+                self._gatekeeper.record_llm_outcome(
+                    decision_id, None, None, outcome_id
+                )
+                self.events[event_index] = (decision_id, outcome_id)
+        except Exception:
+            return
 
     def with_structured_output(self, schema, **kwargs):
         return _GatedStructured(self, schema)
