@@ -56,6 +56,8 @@ def build_graph(
     max_run_llm_calls: int | None = None,
     gatekeeper=None,
     token_counter=None,
+    retry_policy=None,
+    structured_model_wrapper=None,
 ):
     """Compile the workflow.
 
@@ -76,11 +78,19 @@ def build_graph(
             structured model call is admitted and recorded through it.
         token_counter: Optional callable used only with ``gatekeeper`` to count the
             prompt for admission. A missing or invalid count fails closed.
+        retry_policy: Optional retry policy for the three node registrations that
+            already retry (fetch news, topics, tone). ``None`` keeps the module
+            default ``RETRY_POLICY``; the comparison node never receives one.
+        structured_model_wrapper: Optional callable applied AFTER ``BudgetedLLM``
+            and the optional ``GatekeeperLLM`` wrapping, so the wrapper is the
+            outermost layer around the final model object. It is applied before
+            any node partial captures the model.
 
     Note:
         The compiled graph owns one shared run tracker. Build one graph per
         concurrent run; a single graph is intended for sequential runs.
     """
+    effective_retry_policy = RETRY_POLICY if retry_policy is None else retry_policy
     tracker = RunTracker(
         max_tokens=max_run_tokens or settings.max_run_tokens,
         max_calls=max_run_llm_calls or settings.max_run_llm_calls,
@@ -94,6 +104,8 @@ def build_graph(
             max_output_tokens=settings.llm_max_output_tokens,
             token_counter=token_counter,
         )
+    if structured_model_wrapper is not None:
+        llm = structured_model_wrapper(llm)
 
     graph = StateGraph(MarketIntelligenceState)
 
@@ -104,17 +116,17 @@ def build_graph(
     graph.add_node(
         "fetch_news",
         partial(fetch_news_node, llm=llm),
-        retry_policy=RETRY_POLICY,
+        retry_policy=effective_retry_policy,
     )
     graph.add_node(
         "identify_topics",
         partial(identify_topics_node, llm=llm),
-        retry_policy=RETRY_POLICY,
+        retry_policy=effective_retry_policy,
     )
     graph.add_node(
         "analyze_news_tone",
         partial(analyze_news_tone_node, llm=llm),
-        retry_policy=RETRY_POLICY,
+        retry_policy=effective_retry_policy,
     )
     graph.add_node(
         "research_competitor",
