@@ -195,3 +195,4 @@ tmp/
 data/cache/
 config/secrets.json
 .api_keys
+eval/reports/
