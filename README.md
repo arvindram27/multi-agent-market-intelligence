@@ -26,9 +26,9 @@
   <em>Fixture-mode demo snapshot - not a live run.</em>
 </p>
 
-MAMI is our project for building a domain-specific agent harness. Market intelligence is the application we use to exercise it. The harness is meant to decide what an agent run may spend, fetch and write, and to keep a record of what happened. We are building it in stages. Its control components are built and tested offline. A complete harness is not finished, and the pipeline does not call those components yet.
+MAMI is our project for building a domain-specific agent harness. Market intelligence is the application we use to exercise it. The harness is meant to decide what an agent run may spend, fetch and write, and to keep a record of what happened. We are building it in stages, in three layers: the working market-intelligence application; the offline control libraries; and optional guarded graph integration, demonstrated with synthetic collaborators. Its control components are built and tested offline. A complete harness is not finished. The default Streamlit app enables neither the gatekeeper nor the outer invocation guard.
 
-The current workflow reads news feeds and competitor pages and runs typed LLM agents over them. A person reviews each run before anything is saved to Postgres. Each result carries its source details.
+The current workflow reads news feeds and competitor pages and runs typed LLM agents over them. A person reviews each run before its business results are written to Postgres. Checkpoints for the pending run and the separate raw-RSS ingestion store are written without waiting for that approval. Each result carries its source details.
 
 See [Our direction](#our-direction) and [Status](#status) for what is built and what is not.
 
@@ -38,12 +38,12 @@ See [Our direction](#our-direction) and [Status](#status) for what is built and 
 
 We want agent runs that stay inside limits a person set, and that leave a record someone can check.
 
-- **Token budgets:** tokens are reserved before a model call and settled from the usage reported after it. Admission checks use declared token reservations. Actual usage can exceed them. This is not a guarantee on token use or money spent.
+- **Token budgets:** tokens are reserved before a model call and settled from the usage reported after it. Admission checks use a caller-supplied token count plus policy overhead, margin and output allowance to reserve tokens. The current offline graph wiring supplies estimates or fixed test counts, not a validated provider-tokenizer measurement of the serialized request. Actual usage can exceed the reservation. This is not a guarantee on token use or money spent.
 - **Fetch and write:** fetches follow admission rules and a per-run cap. A write is allowed only for the target recorded as approved. The caller supplies that approval record, and we do not check who approved or what they saw.
 - **Record:** accepted decisions and outcomes go into an append-only, hash-chained audit log. A refused or invalid request may leave no event.
 - **Application:** the market intelligence pipeline, with a person approving each run.
 
-What is true today: the control pieces are offline libraries with tests, and the pipeline does not use them. We have not run a live workflow under them. The audit log holds what the caller reports, so it does not prove that an outside action did or did not happen.
+What is true today: the control pieces are offline libraries with tests. The default Streamlit app does not enable the gatekeeper or outer invocation guard. The offline evaluation runner uses a real Gatekeeper, a fake model, patched fetches and a no-op writer; it does not enable the outer InvocationGuard. Separately, synthetic compiled-graph tests exercise that outer guard with a stub gate and stub model. We have not run a live workflow under these controls. The audit log holds what the caller reports, so it does not prove that an outside action did or did not happen.
 
 ## 🚀 Features
 
@@ -73,13 +73,14 @@ What is true today: the control pieces are offline libraries with tests, and the
 │   ├── db/                             # schema DDL, verification, ingestion/analysis facades
 │   ├── ingestion/                      # feed collector, sweep store, CLI
 │   ├── analysis/                       # read-only SQL analysis report and CLI
-│   ├── control.py                      # H1 audit event chain (offline, not wired in)
-│   ├── admission.py                    # H1 admission policy (offline, not wired in)
-│   ├── ledger.py                       # H1 ledger replay (offline, not wired in)
-│   ├── gatekeeper.py                   # H1 gatekeeper: lease, admission and audit calls (offline, not wired in)
+│   ├── control.py                      # H1 audit event chain (offline library)
+│   ├── admission.py                    # H1 admission policy (offline library)
+│   ├── ledger.py                       # H1 ledger replay (offline library)
+│   ├── gatekeeper.py                   # H1 gatekeeper: lease, admission and audit calls (offline; optional graph hook)
 │   ├── persistence.py                  # approved-run persistence contract
 │   └── persistence_postgres.py         # Postgres writer for approved runs
 ├── tests/                              # offline suite and Postgres integration tests
+├── eval/                               # offline fixture harness and separately tested invocation guard
 ├── app.py                              # Streamlit demo entry point
 ├── ui/                                 # Streamlit demo components
 ├── scripts/                            # database and ingestion init scripts
@@ -134,22 +135,23 @@ Status reflects the code and offline tests. Live output quality has not been mea
 - Streamlit demo in live mode and fixture mode
 - GitHub Actions CI with offline tests on Python 3.11 to 3.13, Postgres integration tests and a secret scan
 
-### Built but not connected
-The H1 control layer is a set of offline Python libraries with tests. The pipeline does not call any of it yet.
+### Built offline, not enabled by default
+The H1 control layer is a set of offline Python libraries with tests. The default Streamlit app and a plain `build_graph()` call enable neither the gatekeeper nor the outer invocation guard. `build_graph()` accepts optional `gatekeeper`, `token_counter` and `structured_model_wrapper` hooks. The offline evaluation runner uses a real Gatekeeper, a fake model, patched fetches and a no-op writer, but not the outer InvocationGuard. Separately, synthetic compiled-graph tests exercise the outer guard with a stub gate and stub model. No live workflow has run under these controls.
 - Audit event chain: append-only and hash-chained in SQLite with a read-only verifier
 - Admission policy: pure allow or deny checks with a token reservation estimate
 - Ledger replay: rebuilds per-run token accounts from the audit events and checks stored rows
 - Gatekeeper: one instance per run. It holds a lease and records admission decisions and outcomes for model calls, fetches and writes. It settles a model call's token reservation from usage the caller reports, and can settle a reservation left unknown when usage was missing. A different worker can take over a lease once it has expired. A write is allowed only for the target recorded as approved, and an unresolved write blocks the next one. It records what the caller reports. It does not authenticate the approver and cannot prove an outside effect
 
 ### Planned
-- Tokenizer and request serializer, then wiring the gatekeeper into the pipeline
+- Validate provider tokenization and serialized-request accounting, then make the intended gatekeeper/guard boundary mandatory in the default application path; optional graph hooks already exist
 - Ideas only: Oracle 23ai with vector search, LangSmith with OpenTelemetry, RAGAS evaluation and FastAPI (see `PRODUCTION_PLAN.md`)
 
 ### Limits
-- No measured output quality on live runs and no evaluation set yet
-- The running pipeline counts tokens after each model reply, so one large request can pass the ceiling. Reserving before a call exists only in the unconnected control layer
+- No measured output quality on live runs. A small offline fixture set exists (9 development and 3 held-out items) for harness plumbing; it is not a live-model quality benchmark
+- The default application counts tokens after each model reply, so one large request can cross the ceiling before the run stops. The offline control layer can reserve before a covered call, using a caller-supplied count plus policy allowances. Current offline graph wiring uses estimates or fixed test counts, not a validated wire-level request bound; the default app does not enable that reservation path
 - Lease takeover does not stop a call the old worker already has in flight, and the new worker's own clock decides when a lease has expired
-- After a takeover, the new worker can report an earlier write as failed, which allows another write even if the first one happened. Stronger recovery for a write with an unknown result is not built and is needed before any live write
+- After a takeover, the new worker can report an earlier write as failed, which allows another write even if the first one happened. The gatekeeper-controlled write-recovery path needs stronger handling of unknown outcomes before it is used for live external writes; this is separate from the application's existing Postgres writer
+- The recovery demo simulates abandonment by discarding in-memory instances and advancing an injected clock, while using scratch audit/checkpoint files. It is not an OS process-kill test. Run/content dedup and versioning do not establish exactly-once external effects
 - Topics come from one snapshot so they are not trends over time
 - News tone is a model assessment and not consumer sentiment
 - Local use only and not multi-tenant safe
@@ -599,7 +601,7 @@ The app labels it as **fixture data captured 2026-10-21, not a live run**.
 
 ![MAMI architecture overview](docs/diagrams/mami-architecture-overview.png)
 
-C4-style component overview. It mixes deployable parts and in-process modules. The H1 libraries sit apart because the pipeline does not call them. Editable source: `docs/diagrams/mami-architecture-overview.svg`.
+C4-style component overview. It mixes deployable parts and in-process modules. The H1 libraries sit apart because the default app path does not enable them. Optional graph hooks support offline Gatekeeper wiring, and separate synthetic graph tests exercise the outer invocation guard. Editable source: `docs/diagrams/mami-architecture-overview.svg`.
 
 ## 🔧 Technology Stack
 
@@ -612,7 +614,7 @@ C4-style component overview. It mixes deployable parts and in-process modules. T
 - feedparser, requests and BeautifulSoup
 - SQLite for demo checkpoints
 
-**Offline libraries (H1, not connected):**
+**Offline libraries (H1, optional hooks, not enabled by default):**
 - Python standard library `sqlite3` for the audit event chain
 
 **Deferred stack ideas (not started or committed):**
@@ -670,4 +672,4 @@ Released under the [MIT License](./LICENSE). Copyright (c) 2026 arvindram27.
 
 ---
 
-**Status**: LangGraph pipeline with Postgres storage, RSS ingestion, SQL analysis and CI, implemented in code. The H1 control libraries, including the gatekeeper, are built and tested offline but not connected.
+**Status**: LangGraph pipeline with Postgres storage, RSS ingestion, SQL analysis and CI, implemented in code. The H1 control libraries are built and tested offline. The default app does not enable the gatekeeper or outer invocation guard. The offline evaluation runner wires a real Gatekeeper around fake effects without the outer InvocationGuard; separate synthetic graph tests exercise that guard with stubs. A complete live harness is not finished, and live-model quality remains unmeasured.
